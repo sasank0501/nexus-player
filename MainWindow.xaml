@@ -1,0 +1,93 @@
+<Window x:Class="MpvFrontend.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Nexus Player" Height="760" Width="1280"
+        Background="{StaticResource Bg0}"
+        FontFamily="Segoe UI Variable Display, Segoe UI"
+        WindowStyle="None">
+    <WindowChrome.WindowChrome>
+        <WindowChrome CaptionHeight="40" ResizeBorderThickness="6" GlassFrameThickness="0" CornerRadius="0"/>
+    </WindowChrome.WindowChrome>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition x:Name="TitleRow" Height="40"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- title bar -->
+        <Grid x:Name="TitleBar" Grid.Row="0" Background="{StaticResource Bg0}">
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0">
+                <TextBlock Text="&#xE714;" FontFamily="{StaticResource IconFont}" FontSize="14"
+                           Foreground="{StaticResource Accent}" VerticalAlignment="Center"/>
+                <TextBlock Text="N E X U S  P L A Y E R" Margin="10,0,0,0" FontSize="11.5" FontWeight="SemiBold"
+                           Foreground="{StaticResource Text}" VerticalAlignment="Center"/>
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" WindowChrome.IsHitTestVisibleInChrome="True">
+                <Button Style="{StaticResource CaptionButton}" Content="&#xE921;" Click="MinButton_Click"/>
+                <Button Style="{StaticResource CaptionButton}" Content="&#xE922;" Click="MaxButton_Click"/>
+                <Button Style="{StaticResource CaptionButton}" Content="&#xE8BB;" Click="CloseButton_Click"/>
+            </StackPanel>
+        </Grid>
+
+        <!-- body: full-bleed video + episodes sidebar -->
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition x:Name="SidebarCol" Width="300"/>
+            </Grid.ColumnDefinitions>
+
+            <Border x:Name="VideoContainer" Grid.Column="0" Background="Black"/>
+
+            <Border x:Name="Sidebar" Grid.Column="1" Background="{StaticResource Bg1}"
+                    CornerRadius="10" Margin="0,0,8,8">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <Grid Grid.Row="0" Margin="14,14,14,6">
+                        <TextBlock Text="Episodes" FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource Text}" VerticalAlignment="Center"/>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <Button Style="{StaticResource IconButton}" Width="32" Height="32" FontSize="13"
+                                    Content="&#xE71B;" Click="OpenUrlButton_Click" ToolTip="Open URL"/>
+                            <Button Style="{StaticResource IconButton}" Width="32" Height="32" FontSize="13"
+                                    Content="&#xE710;" Click="AddFilesButton_Click" ToolTip="Add files"/>
+                            <Button Style="{StaticResource IconButton}" Width="32" Height="32" FontSize="13"
+                                    Content="&#xE74D;" Click="RemoveButton_Click" ToolTip="Remove selected"/>
+                        </StackPanel>
+                    </Grid>
+
+                    <Border x:Name="UrlPanel" Grid.Row="1" Visibility="Collapsed"
+                            Background="{StaticResource Bg2}" CornerRadius="8" Margin="14,2,14,6" Padding="10,4">
+                        <DockPanel>
+                            <Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Width="28" Height="28" FontSize="12"
+                                    Content="&#xE768;" Click="PlayUrlButton_Click" ToolTip="Play URL"/>
+                            <TextBox x:Name="UrlBox" Background="Transparent" BorderThickness="0"
+                                     Foreground="{StaticResource Text}" CaretBrush="White" FontSize="12"
+                                     VerticalContentAlignment="Center" KeyDown="UrlBox_KeyDown"/>
+                        </DockPanel>
+                    </Border>
+
+                    <ListBox x:Name="PlaylistBox" Grid.Row="2" Margin="8,0,8,10"
+                             Background="Transparent" BorderThickness="0"
+                             ItemContainerStyle="{StaticResource PlaylistItemStyle}"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             MouseDoubleClick="PlaylistBox_MouseDoubleClick">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel ToolTip="{Binding Path}">
+                                    <TextBlock Text="{Binding Name}" FontSize="12.5" TextTrimming="CharacterEllipsis"/>
+                                    <TextBlock Text="{Binding Folder}" FontSize="10.5" Foreground="{StaticResource TextMuted}"
+                                               TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Grid>
+            </Border>
+        </Grid>
+    </Grid>
+</Window>
