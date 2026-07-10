@@ -134,6 +134,60 @@
             </Setter>
         </Style>
 
+        <!-- track-selection menu (audio / subtitles) -->
+        <Style x:Key="TrackMenu" TargetType="ContextMenu">
+            <Setter Property="Background" Value="#F2161616"/>
+            <Setter Property="Foreground" Value="{StaticResource Text}"/>
+            <Setter Property="FontFamily" Value="Segoe UI Variable Display, Segoe UI"/>
+            <Setter Property="HasDropShadow" Value="True"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ContextMenu">
+                        <Border Background="{TemplateBinding Background}" BorderBrush="#22FFFFFF"
+                                BorderThickness="1" CornerRadius="10" Padding="6" Margin="0,0,6,6" MinWidth="200">
+                            <StackPanel IsItemsHost="True"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="TrackMenuItem" TargetType="MenuItem">
+            <Setter Property="Foreground" Value="{StaticResource Text}"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="MenuItem">
+                        <Border x:Name="bd" Background="Transparent" CornerRadius="6" Padding="10,7">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="20"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock x:Name="check" Text="&#xE73E;" FontFamily="{StaticResource IconFont}"
+                                           FontSize="11" VerticalAlignment="Center" Visibility="Hidden"/>
+                                <ContentPresenter Grid.Column="1" ContentSource="Header" VerticalAlignment="Center"/>
+                            </Grid>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="check" Property="Visibility" Value="Visible"/>
+                                <Setter Property="Foreground" Value="White"/>
+                                <Setter Property="FontWeight" Value="SemiBold"/>
+                            </Trigger>
+                            <Trigger Property="IsHighlighted" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="{StaticResource HoverOverlay}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Foreground" Value="{StaticResource TextMuted}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <!-- slim scrollbar -->
         <Style TargetType="ScrollBar">
             <Setter Property="Width" Value="6"/>

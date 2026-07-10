@@ -127,7 +127,10 @@ public partial class MainWindow : Window
             "--idle=yes",
             "--force-window=yes",
             "--no-border",
-            "--osc=no"      // overlay window replaces mpv's built-in controls
+            "--osc=no",     // overlay window replaces mpv's built-in controls
+            // mpv 0.41 defaults this to auto, silently engaging HDR passthrough on
+            // HDR displays — the overlay's Display switch owns SDR/HDR instead
+            "--target-colorspace-hint=no"
         })
             _mpvProcess.StartInfo.ArgumentList.Add(a);
         _mpvProcess.Start();
@@ -265,6 +268,18 @@ public partial class MainWindow : Window
     private void AfterLayoutRefresh() =>
         Dispatcher.BeginInvoke(() => { ResizeMpvHost(); PositionOverlay(); },
             System.Windows.Threading.DispatcherPriority.Loaded);
+
+    // mpv only re-negotiates its swapchain colorspace (SDR vs HDR passthrough)
+    // when its window is resized — moving between monitors or flipping
+    // target-* options mid-play leaves it stuck on the previous mode. A 1-DIP
+    // shrink-and-restore forces the re-negotiation.
+    public async void NudgeVideoSurface()
+    {
+        if (VideoContainer.ActualWidth < 3) return;
+        _mpvHost.Width = VideoContainer.ActualWidth - 1;
+        await System.Threading.Tasks.Task.Delay(80);
+        ResizeMpvHost();
+    }
 
     public async void HandleHotkey(KeyEventArgs e)
     {

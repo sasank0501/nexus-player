@@ -1,5 +1,9 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.InteropServices;
+using System.Text.Json;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -187,8 +191,89 @@ public partial class OverlayWindow : Window
 
     // --- right cluster ---
 
-    private async void SubToggle_Click(object sender, RoutedEventArgs e) { if (Ipc != null) await Ipc.SendAsync("cycle", "sub-visibility"); }
-    private async void AudioCycle_Click(object sender, RoutedEventArgs e) { if (Ipc != null) await Ipc.SendAsync("cycle", "audio"); }
+    private async void SubToggle_Click(object sender, RoutedEventArgs e) => await ShowTrackMenu((Button)sender, "sub");
+    private async void AudioCycle_Click(object sender, RoutedEventArgs e) => await ShowTrackMenu((Button)sender, "audio");
+
+    private async Task ShowTrackMenu(Button anchor, string type)
+    {
+        if (Ipc == null) return;
+        var tracks = await Ipc.RequestAsync("get_property", "track-list");
+
+        var menu = new ContextMenu
+        {
+            PlacementTarget = anchor,
+            Placement = PlacementMode.Top,
+            Style = (Style)FindResource("TrackMenu"),
+        };
+        // the menu is its own popup: it would survive the chrome (with its anchor)
+        // fading away underneath it, so pause auto-hide while it's open
+        menu.Opened += (_, _) => _hideTimer.Stop();
+        menu.Closed += (_, _) => _hideTimer.Start();
+
+        var anySelected = false;
+        var items = new List<MenuItem>();
+        if (tracks.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var t in tracks.EnumerateArray())
+            {
+                if (t.GetProperty("type").GetString() != type) continue;
+                var id = t.GetProperty("id").GetInt64();
+                var selected = t.TryGetProperty("selected", out var sel) && sel.GetBoolean();
+                anySelected |= selected;
+
+                var item = MakeTrackItem(DescribeTrack(t), selected);
+                var prop = type == "audio" ? "aid" : "sid";
+                item.Click += async (_, _) =>
+                {
+                    if (Ipc == null) return;
+                    await Ipc.SendAsync("set_property", prop, id);
+                    if (prop == "sid") await Ipc.SendAsync("set_property", "sub-visibility", true);
+                };
+                items.Add(item);
+            }
+        }
+
+        if (type == "sub" && items.Count > 0)
+        {
+            var off = MakeTrackItem("Off", !anySelected);
+            off.Click += async (_, _) => { if (Ipc != null) await Ipc.SendAsync("set_property", "sid", "no"); };
+            menu.Items.Add(off);
+        }
+        foreach (var item in items) menu.Items.Add(item);
+
+        if (menu.Items.Count == 0)
+            menu.Items.Add(MakeTrackItem(type == "audio" ? "No audio tracks" : "No subtitles", false, enabled: false));
+
+        menu.IsOpen = true;
+    }
+
+    private MenuItem MakeTrackItem(string label, bool selected, bool enabled = true) => new()
+    {
+        Header = label,
+        IsChecked = selected,
+        IsEnabled = enabled,
+        Style = (Style)FindResource("TrackMenuItem"),
+    };
+
+    private static string DescribeTrack(JsonElement t)
+    {
+        string? S(string key) =>
+            t.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+
+        var channels = t.TryGetProperty("demux-channel-count", out var c) && c.TryGetInt32(out var n) ? n : 0;
+        var detail = string.Join(" • ", new[]
+        {
+            S("lang")?.ToUpperInvariant(),
+            S("codec")?.ToUpperInvariant(),
+            channels > 0 ? $"{channels}ch" : null,
+            t.TryGetProperty("forced", out var fr) && fr.GetBoolean() ? "forced" : null,
+        }.Where(s => !string.IsNullOrEmpty(s)));
+
+        var title = S("title");
+        if (!string.IsNullOrEmpty(title))
+            return detail.Length > 0 ? $"{title}  ({detail})" : title;
+        return detail.Length > 0 ? detail : $"Track {t.GetProperty("id").GetInt64()}";
+    }
     private void Sidebar_Click(object sender, RoutedEventArgs e) => _main.ToggleSidebar();
     private void Fullscreen_Click(object sender, RoutedEventArgs e) => _main.ToggleFullscreen();
 
@@ -225,9 +310,18 @@ public partial class OverlayWindow : Window
     {
         if (!_ready || Ipc == null) return;
         if (DispHdr.IsChecked == true)
+        {
             await Ipc.SendAsync("apply-profile", "4k-hdr");
+        }
         else
+        {
             await Ipc.SendAsync("apply-profile", "4k-hdr", "restore");
+            // restore reverts the hint to mpv's auto default, which re-engages HDR
+            // passthrough on an HDR display — SDR must mean SDR on every monitor
+            await Ipc.SendAsync("set_property", "target-colorspace-hint", "no");
+        }
+        // target-* changes don't take effect until the swapchain re-negotiates
+        _main.NudgeVideoSurface();
     }
 
     private async void Anime4k_Checked(object sender, RoutedEventArgs e)

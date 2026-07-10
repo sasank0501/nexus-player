@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.IO;
 using System.IO.Pipes;
 using System.Text;
@@ -15,6 +16,8 @@ namespace MpvFrontend
         private StreamReader? _reader;
         private StreamWriter? _writer;
         private readonly object _writeLock = new();
+        private readonly ConcurrentDictionary<int, TaskCompletionSource<JsonElement>> _pending = new();
+        private int _nextRequestId = 1000;
 
         public event Action<double>? TimePosChanged;
         public event Action<double>? DurationChanged;
@@ -78,6 +81,15 @@ namespace MpvFrontend
             using (doc)
             {
                 var root = doc.RootElement;
+
+                // reply to a RequestAsync command (Clone: doc is disposed on return)
+                if (root.TryGetProperty("request_id", out var rid) && rid.TryGetInt32(out var reqId))
+                {
+                    if (_pending.TryRemove(reqId, out var tcs))
+                        tcs.TrySetResult(root.TryGetProperty("data", out var d) ? d.Clone() : default);
+                    return;
+                }
+
                 if (!root.TryGetProperty("event", out var evt)) return;
                 if (evt.GetString() != "property-change") return;
                 if (!root.TryGetProperty("name", out var nameProp)) return;
@@ -118,6 +130,27 @@ namespace MpvFrontend
                 _writer.WriteLine(payload);
             }
             await Task.CompletedTask;
+        }
+
+        // send a command and await mpv's reply; ValueKind is Undefined on timeout/error
+        public async Task<JsonElement> RequestAsync(params object[] command)
+        {
+            if (_writer == null) return default;
+            var id = Interlocked.Increment(ref _nextRequestId);
+            var tcs = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _pending[id] = tcs;
+            var payload = JsonSerializer.Serialize(new { command, request_id = id });
+            lock (_writeLock)
+            {
+                _writer.WriteLine(payload);
+            }
+            var done = await Task.WhenAny(tcs.Task, Task.Delay(3000));
+            if (done != tcs.Task)
+            {
+                _pending.TryRemove(id, out _);
+                return default;
+            }
+            return await tcs.Task;
         }
 
         public Task LoadFile(string path) => SendAsync("loadfile", path, "replace");
