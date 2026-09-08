@@ -21,6 +21,15 @@ public partial class OverlayWindow : Window
     private double _duration;
     private bool _muted;
     private bool _ready; // suppress Checked events fired during InitializeComponent
+    private bool _isFullscreen;
+    private bool _suppressVolumeEcho;
+    private DispatcherTimer? _toastTimer;
+
+    // Segoe Fluent glyphs as escapes rather than literal PUA characters
+    private const string PlayGlyph   = "\uE768";
+    private const string PauseGlyph  = "\uE769";
+    private const string VolumeGlyph = "\uE767";
+    private const string MuteGlyph   = "\uE74F";
 
     private static readonly string ShaderDir =
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData).Replace('\\', '/') + "/mpv/shaders/Anime4K";
@@ -31,7 +40,8 @@ public partial class OverlayWindow : Window
         InitializeComponent();
         _ready = true;
         SettingsPanel.Visibility = Visibility.Collapsed;
-        KeyDown += (_, e) => _main.HandleHotkey(e);
+        // No KeyDown hook here: this window is WS_EX_NOACTIVATE and can never take
+        // focus, so its key events never fire. v1 carried that handler as dead code.
         PreviewTextInput += (_, e) => _main.ForwardTextToMpv(e);
         _hideTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2.6) };
         _hideTimer.Tick += (_, _) => HideChrome();
@@ -90,7 +100,7 @@ public partial class OverlayWindow : Window
         DurationLabel.Text = Fmt(dur);
     }
 
-    public void UpdatePause(bool paused) => PlayPauseButton.Content = paused ? "" : "";
+    public void UpdatePause(bool paused) => PlayPauseButton.Content = paused ? PlayGlyph : PauseGlyph;
 
     public void SetNowPlaying(string title, string sub)
     {
@@ -103,6 +113,65 @@ public partial class OverlayWindow : Window
 
     private static string Fmt(double s) =>
         TimeSpan.FromSeconds(Math.Max(0, s)).ToString(s >= 3600 ? @"h\:mm\:ss" : @"mm\:ss");
+
+    // Volume, mute and speed are owned by mpv and observed back, so the UI can
+    // never drift from the engine the way v1's three separate copies of the
+    // volume did. These are the observer sinks.
+
+    public void UpdateVolume(double volume)
+    {
+        if (Math.Abs(VolumeSlider.Value - volume) < 0.5) return;
+        _suppressVolumeEcho = true;
+        VolumeSlider.Value = volume;
+        _suppressVolumeEcho = false;
+    }
+
+    public void UpdateMute(bool muted)
+    {
+        _muted = muted;
+        VolumeButton.Content = muted ? MuteGlyph : VolumeGlyph;
+    }
+
+    public void UpdateSpeed(double speed)
+    {
+        _ready = false; // radio Checked handlers would echo straight back to mpv
+        Speed1.IsChecked = Math.Abs(speed - 1.0) < 0.01;
+        Speed125.IsChecked = Math.Abs(speed - 1.25) < 0.01;
+        Speed15.IsChecked = Math.Abs(speed - 1.5) < 0.01;
+        Speed2.IsChecked = Math.Abs(speed - 2.0) < 0.01;
+        _ready = true;
+    }
+
+    public void ApplyPersistedState(Settings settings)
+    {
+        _ready = false;
+        FitContain.IsChecked = settings.VideoFit == "Contain";
+        FitCover.IsChecked = settings.VideoFit == "Cover";
+        FitFill.IsChecked = settings.VideoFit == "Fill";
+        _ready = true;
+        UpdateVolume(settings.Volume);
+        UpdateMute(settings.Muted);
+        UpdateSpeed(settings.Speed);
+    }
+
+    public void SetFullscreenState(bool isFullscreen) => _isFullscreen = isFullscreen;
+
+    // Failures used to be completely invisible — a dead loadfile just left a black
+    // frame. Anything routed through Log.UserError surfaces here.
+    public void ShowToast(string message, int milliseconds = 5000)
+    {
+        ToastText.Text = message;
+        Toast.Visibility = Visibility.Visible;
+        _toastTimer?.Stop();
+        _toastTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(milliseconds) };
+        _toastTimer.Tick += (_, _) =>
+        {
+            _toastTimer?.Stop();
+            _toastTimer = null;
+            Toast.Visibility = Visibility.Collapsed;
+        };
+        _toastTimer.Start();
+    }
 
     // --- auto-hide ---
 
@@ -138,15 +207,36 @@ public partial class OverlayWindow : Window
 
     // --- video click ---
 
-    private async void ClickLayer_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    // v1 toggled pause immediately and then toggled it back on the second click,
+    // which made the play icon visibly blink on every double-click-to-fullscreen.
+    // Hold the single-click action until the double-click window has passed.
+    private DispatcherTimer? _clickTimer;
+
+    [DllImport("user32.dll")] private static extern int GetDoubleClickTime();
+
+    private void ClickLayer_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (Ipc == null) return;
-        await Ipc.TogglePause();
-        if (e.ClickCount == 2)
+        CancelPendingClick();
+
+        if (e.ClickCount >= 2)
         {
-            await Ipc.TogglePause(); // undo the single-click toggle
             _main.ToggleFullscreen();
+            return;
         }
+
+        _clickTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(GetDoubleClickTime()) };
+        _clickTimer.Tick += (_, _) =>
+        {
+            CancelPendingClick();
+            Fire.AndForget(Ipc?.TogglePause(), "click to pause");
+        };
+        _clickTimer.Start();
+    }
+
+    private void CancelPendingClick()
+    {
+        _clickTimer?.Stop();
+        _clickTimer = null;
     }
 
     // --- transport ---
@@ -162,12 +252,13 @@ public partial class OverlayWindow : Window
         if (Ipc == null) return;
         _muted = !_muted;
         await Ipc.SendAsync("set_property", "mute", _muted);
-        VolumeButton.Content = _muted ? "" : "";
+        VolumeButton.Content = _muted ? MuteGlyph : VolumeGlyph;
     }
 
-    private async void Volume_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    private void Volume_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
-        if (Ipc != null) await Ipc.SetVolume(e.NewValue);
+        if (_suppressVolumeEcho) return; // value came from mpv; don't send it back
+        Fire.AndForget(Ipc?.SetVolume(e.NewValue), "set volume");
     }
 
     // manual click/scrub: set value straight from the mouse x — WPF's own

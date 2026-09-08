@@ -2,8 +2,12 @@ using System;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
+using System.Text.Json;
+using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using Microsoft.Win32;
@@ -18,19 +22,19 @@ public record PlaylistItem(string Path)
     public string Folder => IsUrl
         ? (Uri.TryCreate(Path, UriKind.Absolute, out var u) ? u.Host : "stream")
         : new DirectoryInfo(System.IO.Path.GetDirectoryName(Path) ?? "").Name;
+
+    public bool Matches(string path) =>
+        string.Equals(Path, path, StringComparison.OrdinalIgnoreCase);
 }
 
 public record SessionState(string Path, double Position);
 
 public partial class MainWindow : Window
 {
-    private const string MpvPath = @"C:\Users\Sasank\Downloads\bootstrapper\mpv.exe";
-
-    private static readonly string SessionFile = System.IO.Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "NexusPlayer", "session.json");
-
     private readonly MpvHost _mpvHost = new();
     private readonly ObservableCollection<PlaylistItem> _playlist = new();
+    private readonly Settings _settings = Settings.Load();
+
     private Process? _mpvProcess;
     private OverlayWindow? _overlay;
     private bool _isFullscreen;
@@ -39,15 +43,22 @@ public partial class MainWindow : Window
     private double _lastTimePos;
     private double _lastSavedPos;
     private volatile bool _closing;
-    private double? _pendingResume; // seek target once the restored file's duration arrives
     private WindowState _preFullscreenState;
     private Rect _preFullscreenBounds;
 
+    // Resume is applied when the restored file's duration arrives (seeking right
+    // after loadfile fails). It is bound to the path it was recorded for so that
+    // an auto-advance or a manual load can never inherit someone else's offset.
+    private double? _pendingResume;
+    private string? _pendingResumePath;
+
     internal MpvIpcClient? Ipc { get; private set; }
+    internal Settings Config => _settings;
 
     public MainWindow()
     {
         InitializeComponent();
+        AppPaths.EnsureAll();
         PlaylistBox.ItemsSource = _playlist;
 
         _mpvHost.Width = 100;
@@ -59,10 +70,12 @@ public partial class MainWindow : Window
         SizeChanged += (_, _) => { ResizeMpvHost(); PositionOverlay(); };
         LocationChanged += (_, _) => PositionOverlay();
         StateChanged += MainWindow_StateChanged;
+
         // PreviewKeyDown, not KeyDown: a focused playlist ListBoxItem otherwise
         // consumes the arrow keys for list navigation and hotkeys never fire
         PreviewKeyDown += (_, e) => HandleHotkey(e);
         PreviewTextInput += (_, e) => ForwardTextToMpv(e);
+
         // fallback for wheel-over-video when Windows routes WM_MOUSEWHEEL to the
         // focused window (main) instead of the hovered overlay ("scroll inactive
         // windows" off); guard to the video area so the sidebar still scrolls
@@ -73,6 +86,8 @@ public partial class MainWindow : Window
             _overlay?.AdjustVolume(e.Delta > 0 ? 5 : -5);
             e.Handled = true;
         };
+
+        Log.UserVisibleError += msg => Dispatcher.BeginInvoke(() => _overlay?.ShowToast(msg));
     }
 
     private void ResizeMpvHost()
@@ -84,7 +99,6 @@ public partial class MainWindow : Window
     // Borderless windows maximize over the taskbar by default; clamp maximize to
     // the work area. (Fullscreen doesn't use Maximized at all — it sets explicit
     // monitor bounds, so the shell's native fullscreen handling kicks in.)
-
     protected override void OnSourceInitialized(EventArgs e)
     {
         base.OnSourceInitialized(e);
@@ -130,16 +144,68 @@ public partial class MainWindow : Window
     [DllImport("user32.dll")] private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint flags);
     [DllImport("user32.dll")] private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO mi);
 
+    // --- startup -----------------------------------------------------------
+
     private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
         ResizeMpvHost();
+        Log.Info("Nexus Player starting");
 
-        var pipeName = $"mpv-frontend-{Environment.ProcessId}";
+        var mpvPath = MpvLocator.Locate(_settings);
+        if (mpvPath == null)
+        {
+            var picked = PromptForMpv();
+            if (picked == null)
+            {
+                Log.UserError("mpv.exe not found. Set its location in settings to start playback.");
+                return;
+            }
+            mpvPath = picked;
+            _settings.MpvPath = picked;
+            _settings.Save();
+        }
+
+        if (!await StartMpv(mpvPath)) return;
+
+        _overlay = new OverlayWindow(this) { Owner = this };
+        _overlay.Show();
+        PositionOverlay();
+
+        WireIpcObservers();
+
+        await Ipc!.SetVolume(_settings.Volume);
+        await Ipc.SetProperty("mute", _settings.Muted);
+        if (Math.Abs(_settings.Speed - 1.0) > 0.001) await Ipc.SetProperty("speed", _settings.Speed);
+        _overlay.ApplyPersistedState(_settings);
+
+        await RestoreLastSession();
+    }
+
+    private string? PromptForMpv()
+    {
+        var dlg = new OpenFileDialog
+        {
+            Title = "Locate mpv.exe",
+            Filter = "mpv executable|mpv.exe|All files (*.*)|*.*",
+        };
+        return dlg.ShowDialog() == true ? dlg.FileName : null;
+    }
+
+    private async Task<bool> StartMpv(string mpvPath)
+    {
+        var pipeName = $"nexus-player-{Environment.ProcessId}";
         var hwnd = _mpvHost.Handle;
 
-        _mpvProcess = new Process
+        var psi = new ProcessStartInfo
         {
-            StartInfo = new ProcessStartInfo { FileName = MpvPath, UseShellExecute = false }
+            FileName = mpvPath,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            // v1 left mpv's output going to a console that does not exist when the
+            // app is launched from its shortcut, so startup errors (stale mpv.conf
+            // options, failed URL loads) were invisible. Capture both streams.
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
         };
         foreach (var a in new[]
         {
@@ -148,96 +214,189 @@ public partial class MainWindow : Window
             "--idle=yes",
             "--force-window=yes",
             "--no-border",
-            "--osc=no",     // overlay window replaces mpv's built-in controls
-            // mpv 0.41 defaults this to auto, silently engaging HDR passthrough on
-            // HDR displays — the overlay's Display switch owns SDR/HDR instead
-            "--target-colorspace-hint=no"
+            "--osc=no",     // our overlay replaces mpv's built-in controls
+            // mpv defaults this to auto, which silently engages HDR passthrough on
+            // an HDR display — the app's Display switch owns SDR/HDR instead
+            "--target-colorspace-hint=no",
         })
-            _mpvProcess.StartInfo.ArgumentList.Add(a);
-        _mpvProcess.Start();
+            psi.ArgumentList.Add(a);
 
-        Ipc = new MpvIpcClient(pipeName);
-        var connected = await Ipc.ConnectAsync();
-        if (!connected)
+        try
         {
-            MessageBox.Show("Could not connect to mpv. Try restarting the app.", "Nexus Player");
-            return;
+            _mpvProcess = new Process { StartInfo = psi, EnableRaisingEvents = true };
+            _mpvProcess.OutputDataReceived += (_, ev) => { if (ev.Data != null) Log.Mpv(ev.Data); };
+            _mpvProcess.ErrorDataReceived += (_, ev) => { if (ev.Data != null) Log.Mpv("ERR " + ev.Data); };
+            _mpvProcess.Exited += MpvProcessExited;
+
+            _mpvProcess.Start();
+            _mpvProcess.BeginOutputReadLine();
+            _mpvProcess.BeginErrorReadLine();
+            Log.Info($"mpv started (pid {_mpvProcess.Id}) from {mpvPath}");
+        }
+        catch (Exception ex)
+        {
+            // v1 let this throw out of an async void handler, killing the app on
+            // launch with no message at all
+            Log.UserError("Could not start mpv. Check its path in settings.", ex);
+            return false;
         }
 
-        _overlay = new OverlayWindow(this) { Owner = this };
-        _overlay.Show();
-        PositionOverlay();
-
-        Ipc.TimePosChanged += pos =>
+        Ipc = new MpvIpcClient(pipeName);
+        if (!await Ipc.ConnectAsync())
         {
-            // mpv resets time-pos as it tears down — once we're closing, the
-            // position saved by MainWindow_Closing is the truth, freeze it
+            Log.UserError("Could not connect to mpv. Try restarting the app.");
+            return false;
+        }
+        Ipc.Disconnected += () => Dispatcher.BeginInvoke(() =>
+        {
+            if (!_closing) Log.UserError("mpv stopped unexpectedly. Restart the app to continue.");
+        });
+        return true;
+    }
+
+    private void MpvProcessExited(object? sender, EventArgs e)
+    {
+        if (_closing) return;
+        var code = -1;
+        try { code = _mpvProcess?.ExitCode ?? -1; } catch { }
+        Log.Error($"mpv exited unexpectedly with code {code}; see mpv.log");
+    }
+
+    private void WireIpcObservers()
+    {
+        if (Ipc == null) return;
+
+        Ipc.ObserveDouble("time-pos", pos =>
+        {
+            // mpv resets time-pos as it tears down — once we are closing, the
+            // position saved by MainWindow_Closing is the truth, so freeze it
             if (_closing) return;
             _lastTimePos = pos;
             if (Math.Abs(pos - _lastSavedPos) >= 30) SaveSession(); // crash protection
-            Dispatcher.Invoke(() => _overlay?.UpdateTime(pos));
-        };
-        Ipc.DurationChanged += dur => Dispatcher.Invoke(() =>
+            Dispatcher.BeginInvoke(() => _overlay?.UpdateTime(pos));
+        });
+
+        Ipc.ObserveDouble("duration", dur => Dispatcher.BeginInvoke(() =>
         {
             _overlay?.UpdateDuration(dur);
-            // duration arriving means the restored file finished loading — safe to seek now
-            if (_pendingResume is double resume && dur > 0 && Ipc != null)
-            {
-                _pendingResume = null;
-                if (resume < dur - 10) _ = Ipc.SendAsync("set_property", "time-pos", resume);
-            }
-        });
-        Ipc.PauseChanged += paused => Dispatcher.Invoke(() => _overlay?.UpdatePause(paused));
+            ApplyPendingResume(dur);
+        }));
+
+        Ipc.ObserveBool("pause", paused => Dispatcher.BeginInvoke(() => _overlay?.UpdatePause(paused)));
+
+        // THE fix for v1's worst bug. mpv advances its own playlist at end of
+        // file, but v1 observed nothing, so _currentItem stayed pinned to the
+        // first file: closing during episode 2 wrote episode 1's path together
+        // with episode 2's timestamp, and the next launch resumed the wrong
+        // episode at a meaningless offset. The now-playing text went stale for
+        // exactly the same reason.
+        Ipc.ObserveString("path", p => Dispatcher.BeginInvoke(() => OnMpvPathChanged(p)));
+
         // yt-dlp resolves the real title a moment after loadfile; swap it in for raw URLs
-        Ipc.MediaTitleChanged += title => Dispatcher.Invoke(() =>
+        Ipc.ObserveString("media-title", title => Dispatcher.BeginInvoke(() =>
         {
             if (_currentItem is { IsUrl: true } && !string.IsNullOrWhiteSpace(title) && !title.Contains("://"))
                 _overlay?.SetNowPlaying(title, _currentItem.Folder);
-        });
+        }));
 
-        // re-observe pause so its initial value arrives now that handlers are attached
-        await Ipc.SendAsync("observe_property", 4, "pause");
-        await Ipc.SetVolume(35);
-        await RestoreLastSession();
+        Ipc.ObserveDouble("speed", s => { _settings.Speed = s; Dispatcher.BeginInvoke(() => _overlay?.UpdateSpeed(s)); });
+        Ipc.ObserveDouble("volume", v => { _settings.Volume = v; Dispatcher.BeginInvoke(() => _overlay?.UpdateVolume(v)); });
+        Ipc.ObserveBool("mute", m => { _settings.Muted = m; Dispatcher.BeginInvoke(() => _overlay?.UpdateMute(m)); });
     }
 
-    // --- last-played session ---
+    private void OnMpvPathChanged(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return;
+        if (_currentItem != null && _currentItem.Matches(path)) return;
+
+        var item = _playlist.FirstOrDefault(i => i.Matches(path));
+        if (item == null)
+        {
+            item = new PlaylistItem(path);
+            _playlist.Add(item);
+        }
+
+        _currentItem = item;
+        PlaylistBox.SelectedItem = item;
+
+        // the position counters belong to the file that just ended; clearing them
+        // stops the next save from attributing an old offset to the new file
+        _lastTimePos = 0;
+        _lastSavedPos = 0;
+
+        // a resume offset is only ever valid for the file it was recorded against
+        if (!string.Equals(path, _pendingResumePath, StringComparison.OrdinalIgnoreCase))
+        {
+            _pendingResume = null;
+            _pendingResumePath = null;
+        }
+
+        _overlay?.SetNowPlaying(item.Name, item.Folder);
+        Log.Info($"now playing: {path}");
+    }
+
+    private void ApplyPendingResume(double duration)
+    {
+        if (_pendingResume is not double resume || duration <= 0 || Ipc == null) return;
+        if (_currentItem == null || _pendingResumePath == null || !_currentItem.Matches(_pendingResumePath)) return;
+
+        _pendingResume = null;
+        _pendingResumePath = null;
+        if (resume < duration - 10)
+            Fire.AndForget(Ipc.SetProperty("time-pos", resume), "resume seek");
+    }
+
+    // --- last-played session ----------------------------------------------
 
     private void SaveSession()
     {
         if (_currentItem == null) return;
         try
         {
-            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(SessionFile)!);
-            File.WriteAllText(SessionFile, System.Text.Json.JsonSerializer.Serialize(
-                new SessionState(_currentItem.Path, _lastTimePos)));
+            AppPaths.EnsureAll();
+            var tmp = AppPaths.SessionFile + ".tmp";
+            File.WriteAllText(tmp, JsonSerializer.Serialize(new SessionState(_currentItem.Path, _lastTimePos)));
+            File.Move(tmp, AppPaths.SessionFile, overwrite: true);
             _lastSavedPos = _lastTimePos;
         }
-        catch { /* best effort */ }
+        catch (Exception ex) { Log.Error("session save failed", ex); }
     }
 
-    private async System.Threading.Tasks.Task RestoreLastSession()
+    private async Task RestoreLastSession()
     {
         SessionState? s = null;
         try
         {
-            if (File.Exists(SessionFile))
-                s = System.Text.Json.JsonSerializer.Deserialize<SessionState>(File.ReadAllText(SessionFile));
+            if (File.Exists(AppPaths.SessionFile))
+                s = JsonSerializer.Deserialize<SessionState>(File.ReadAllText(AppPaths.SessionFile));
         }
-        catch { /* corrupt/unreadable — start fresh */ }
+        catch (Exception ex) { Log.Warn("session file unreadable, starting fresh: " + ex.Message); }
+
         if (s == null || string.IsNullOrWhiteSpace(s.Path) || Ipc == null) return;
 
         var item = new PlaylistItem(s.Path);
-        if (!item.IsUrl && !File.Exists(s.Path)) return; // moved or deleted since last run
+        if (!item.IsUrl && !File.Exists(s.Path))
+        {
+            Log.Info("last session file no longer exists: " + s.Path);
+            return;
+        }
 
         _playlist.Add(item);
         PlaylistBox.SelectedItem = item;
         _currentItem = item;
-        _pendingResume = s.Position > 5 ? s.Position : null;
+
+        if (s.Position > 5)
+        {
+            _pendingResume = s.Position;
+            _pendingResumePath = s.Path;
+        }
+
         await Ipc.LoadFile(s.Path);
-        await Ipc.SendAsync("set_property", "pause", true); // show it, don't blast audio
+        await Ipc.SetPause(true); // show it, don't blast audio on launch
         _overlay?.SetNowPlaying(item.Name, item.Folder);
     }
+
+    // --- window plumbing ---------------------------------------------------
 
     private void PositionOverlay()
     {
@@ -270,16 +429,27 @@ public partial class MainWindow : Window
     {
         _closing = true;
         SaveSession();
+
+        if (WindowState == WindowState.Normal && !_isFullscreen)
+        {
+            _settings.WindowLeft = Left;
+            _settings.WindowTop = Top;
+            _settings.WindowWidth = Width;
+            _settings.WindowHeight = Height;
+        }
+        _settings.SidebarVisible = _sidebarVisible;
+        _settings.Save();
+
         Ipc?.Dispose();
         try
         {
-            if (_mpvProcess is { HasExited: false })
-                _mpvProcess.Kill();
+            if (_mpvProcess is { HasExited: false }) _mpvProcess.Kill();
         }
-        catch { /* already gone */ }
+        catch (Exception ex) { Log.Warn("mpv already gone: " + ex.Message); }
+        Log.Info("Nexus Player closed");
     }
 
-    // --- window chrome ---
+    // --- window chrome -----------------------------------------------------
 
     private void MinButton_Click(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
 
@@ -341,6 +511,7 @@ public partial class MainWindow : Window
             Height = _preFullscreenBounds.Height;
             WindowState = _preFullscreenState;
         }
+        _overlay?.SetFullscreenState(_isFullscreen);
         AfterLayoutRefresh();
     }
 
@@ -349,93 +520,113 @@ public partial class MainWindow : Window
             System.Windows.Threading.DispatcherPriority.Loaded);
 
     // mpv only re-negotiates its swapchain colorspace (SDR vs HDR passthrough)
-    // when its window is resized — moving between monitors or flipping
-    // target-* options mid-play leaves it stuck on the previous mode. A 1-DIP
+    // when its window is resized — moving between monitors or flipping target-*
+    // options mid-play leaves it stuck on the previous mode. A 1-DIP
     // shrink-and-restore forces the re-negotiation.
-    public async void NudgeVideoSurface()
+    public void NudgeVideoSurface() => Fire.AndForget(NudgeVideoSurfaceAsync(), "video surface nudge");
+
+    private async Task NudgeVideoSurfaceAsync()
     {
         if (VideoContainer.ActualWidth < 3) return;
         _mpvHost.Width = VideoContainer.ActualWidth - 1;
-        await System.Threading.Tasks.Task.Delay(80);
+        await Task.Delay(80);
         ResizeMpvHost();
     }
 
-    public async void HandleHotkey(KeyEventArgs e)
+    // --- keyboard ----------------------------------------------------------
+
+    // Every branch sets e.Handled BEFORE starting async work. v1 set it after an
+    // await, which only suppressed routing because the IPC write happened to
+    // complete synchronously; making the IPC genuinely async would have silently
+    // broken every hotkey (Space reaching the focused button, arrows reaching
+    // the playlist) with nothing in the code to point at.
+    public void HandleHotkey(KeyEventArgs e)
     {
-        // typing in a TextBox (URL input) must not trigger player hotkeys
-        if (Keyboard.FocusedElement is System.Windows.Controls.TextBox) return;
+        if (Keyboard.FocusedElement is TextBox) return; // typing a URL, not a player key
+        var ipc = Ipc;
+
         switch (e.Key)
         {
             case Key.Escape when _isFullscreen:
-                ToggleFullscreen();
                 e.Handled = true;
+                ToggleFullscreen();
                 break;
             case Key.F11:
             case Key.F:
-                ToggleFullscreen();
                 e.Handled = true;
+                ToggleFullscreen();
                 break;
             case Key.Space:
-                if (Ipc != null) await Ipc.TogglePause();
                 e.Handled = true;
+                Fire.AndForget(ipc?.TogglePause(), "toggle pause");
                 break;
             case Key.Left:
-                if (Ipc != null) await Ipc.SendAsync("seek", -5, "relative");
                 e.Handled = true;
+                Fire.AndForget(ipc?.SeekRelative(-5), "seek back");
                 break;
             case Key.Right:
-                if (Ipc != null) await Ipc.SendAsync("seek", 5, "relative");
                 e.Handled = true;
+                Fire.AndForget(ipc?.SeekRelative(5), "seek forward");
                 break;
             case Key.Up:
-                _overlay?.AdjustVolume(5);
                 e.Handled = true;
+                _overlay?.AdjustVolume(5);
                 break;
             case Key.Down:
-                _overlay?.AdjustVolume(-5);
                 e.Handled = true;
+                _overlay?.AdjustVolume(-5);
                 break;
             case Key.M:
-                _overlay?.ToggleMute();
                 e.Handled = true;
+                _overlay?.ToggleMute();
                 break;
             case Key.PageUp:
-                if (Ipc != null) await Ipc.SendAsync("keypress", "PGUP");   // next chapter
                 e.Handled = true;
+                Fire.AndForget(ipc?.KeyPress("PGUP"), "next chapter");
                 break;
             case Key.PageDown:
-                if (Ipc != null) await Ipc.SendAsync("keypress", "PGDWN"); // previous chapter
                 e.Handled = true;
+                Fire.AndForget(ipc?.KeyPress("PGDWN"), "previous chapter");
                 break;
         }
     }
 
-    // forward printable keys to mpv so its default bindings work
-    // (m mute, s screenshot, [ ] speed, , . frame-step, 9/0 volume, v sub toggle, ...)
-    public async void ForwardTextToMpv(TextCompositionEventArgs e)
+    // Forward printable keys to mpv so its own default bindings work
+    // (s screenshot, [ ] speed, , . frame-step, 9/0 volume, v sub toggle, ...)
+    public void ForwardTextToMpv(TextCompositionEventArgs e)
     {
         if (Ipc == null || string.IsNullOrEmpty(e.Text)) return;
-        if (e.OriginalSource is System.Windows.Controls.TextBox) return; // typing a URL, not a player key
+        if (e.OriginalSource is TextBox) return; // typing a URL, not a player key
+
         var ch = e.Text;
-        // skip keys the app handles itself (handled KeyDown doesn't suppress TextInput
-        // in WPF, so without this they'd reach mpv too and double-trigger) and q = mpv quit
+        // Skip keys the app handles itself: a handled KeyDown does NOT suppress
+        // TextInput in WPF, so without this they would reach mpv too and
+        // double-trigger. 'q' would quit mpv's engine outright.
         if (ch is " " or "q" or "Q" or "f" or "F" or "m" or "M") return;
-        await Ipc.SendAsync("keypress", ch);
+
         e.Handled = true;
+        Fire.AndForget(Ipc.KeyPress(ch), "forward key to mpv");
     }
 
-    // --- playlist ---
+    // --- playlist ----------------------------------------------------------
 
-    private async void PlaylistBox_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    private void PlaylistBox_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
         if (PlaylistBox.SelectedItem is not PlaylistItem item || Ipc == null) return;
+        PlayItem(item);
+    }
+
+    private void PlayItem(PlaylistItem item)
+    {
+        if (Ipc == null) return;
         _currentItem = item;
-        _pendingResume = null; // user picked something else; don't seek it to the old spot
-        await Ipc.LoadFile(item.Path);
+        _pendingResume = null;   // the user picked this; don't inherit an old offset
+        _pendingResumePath = null;
+        Fire.AndForget(Ipc.LoadFile(item.Path), "load file");
         _overlay?.SetNowPlaying(item.Name, item.Folder);
     }
 
-    // --- play from URL ---
+    // --- play from URL -----------------------------------------------------
 
     private void OpenUrlButton_Click(object sender, RoutedEventArgs e)
     {
@@ -468,7 +659,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private async System.Threading.Tasks.Task PlayUrlFromBox()
+    private async Task PlayUrlFromBox()
     {
         var url = UrlBox.Text.Trim();
         if (url.Length == 0 || Ipc == null) return;
@@ -479,31 +670,42 @@ public partial class MainWindow : Window
         PlaylistBox.SelectedItem = item;
         _currentItem = item;
         _pendingResume = null;
+        _pendingResumePath = null;
+
         await Ipc.LoadFile(url);
         _overlay?.SetNowPlaying(item.Name, item.Folder);
 
         UrlBox.Clear();
         UrlPanel.Visibility = Visibility.Collapsed;
         Focus(); // hand keyboard back to the window so hotkeys work
+
+        // mpv reports nothing when a site is not yt-dlp supported; if no file has
+        // loaded a moment later, say so rather than sitting on a black frame
+        await Task.Delay(4000);
+        if (Ipc != null && await Ipc.GetDoubleAsync("duration") is null && _currentItem == item)
+            Log.UserError("Could not play that link — the site may not be supported.");
     }
 
     private async void AddFilesButton_Click(object sender, RoutedEventArgs e)
     {
+        var initial = _settings.LibraryRoots.FirstOrDefault(Directory.Exists)
+                      ?? Environment.GetFolderPath(Environment.SpecialFolder.MyVideos);
         var dlg = new OpenFileDialog
         {
             Multiselect = true,
-            InitialDirectory = @"C:\Users\Sasank\Downloads",
+            InitialDirectory = initial,
             Filter = "Video files (*.mkv;*.mp4;*.avi;*.mov;*.webm)|*.mkv;*.mp4;*.avi;*.mov;*.webm|All files (*.*)|*.*"
         };
-        if (dlg.ShowDialog() != true) return;
+        if (dlg.ShowDialog() != true || Ipc == null) return;
 
         var wasEmpty = _playlist.Count == 0;
         foreach (var f in dlg.FileNames) _playlist.Add(new PlaylistItem(f));
 
-        if (wasEmpty && Ipc != null && dlg.FileNames.Length > 0)
+        if (wasEmpty && dlg.FileNames.Length > 0)
         {
             _currentItem = _playlist[0];
             _pendingResume = null;
+            _pendingResumePath = null;
             await Ipc.LoadFile(dlg.FileNames[0]);
             _overlay?.SetNowPlaying(_playlist[0].Name, _playlist[0].Folder);
             for (int i = 1; i < dlg.FileNames.Length; i++)

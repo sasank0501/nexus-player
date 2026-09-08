@@ -122,5 +122,15 @@
                 </StackPanel>
             </Border>
         </Grid>
+
+        <!-- error/status toast. Deliberately OUTSIDE Chrome: a failure must stay
+             visible even after the controls have auto-hidden. -->
+        <Border x:Name="Toast" Visibility="Collapsed"
+                HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,120"
+                Background="#F2181818" BorderBrush="#22FFFFFF" BorderThickness="1"
+                CornerRadius="10" Padding="16,10" MaxWidth="520" IsHitTestVisible="False">
+            <TextBlock x:Name="ToastText" Text="" FontSize="12.5" Foreground="{StaticResource Text}"
+                       TextWrapping="Wrap"/>
+        </Border>
     </Grid>
 </Window>

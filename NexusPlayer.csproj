@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <ApplicationIcon>nexus.ico</ApplicationIcon>
+
+    <AssemblyName>NexusPlayer</AssemblyName>
+    <RootNamespace>MpvFrontend</RootNamespace>
+    <Product>Nexus Player</Product>
+    <AssemblyTitle>Nexus Player</AssemblyTitle>
+    <Version>2.0.0</Version>
+
+    <!-- surface async-void and nullability mistakes as build errors, not runtime crashes -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <WarningsAsErrors>CS4014;CS1998</WarningsAsErrors>
+  </PropertyGroup>
+
+</Project>
