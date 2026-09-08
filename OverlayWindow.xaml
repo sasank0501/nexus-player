@@ -3,134 +3,503 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="overlay" WindowStyle="None" AllowsTransparency="True" Background="Transparent"
         ShowInTaskbar="False" ShowActivated="False" ResizeMode="NoResize"
-        FontFamily="Segoe UI Variable Display, Segoe UI">
+        FontFamily="{StaticResource UiFont}">
     <Grid MouseMove="Root_MouseMove" MouseWheel="Root_MouseWheel">
-        <!-- click layer: pause / double-click fullscreen.
-             Alpha must be >0: layered windows are click-through on fully transparent pixels,
-             and the overlay would stop receiving mouse input once the chrome fades out. -->
+
+        <!-- Click layer: pause / double-click fullscreen.
+             Alpha must be > 0. Layered windows are click-through on fully
+             transparent pixels, so the overlay would stop receiving mouse input
+             entirely once the chrome faded out. -->
         <Rectangle x:Name="ClickLayer" Fill="#01000000" MouseLeftButtonDown="ClickLayer_MouseLeftButtonDown"/>
 
-        <!-- everything that auto-hides -->
+        <!-- ==================== everything that auto-hides ==================== -->
         <Grid x:Name="Chrome">
 
             <!-- top scrim + title block -->
-            <Border VerticalAlignment="Top" Height="180" IsHitTestVisible="False">
-                <Border.Background>
-                    <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                        <GradientStop Color="#A6000000" Offset="0"/>
-                        <GradientStop Color="#00000000" Offset="1"/>
-                    </LinearGradientBrush>
-                </Border.Background>
-            </Border>
+            <Border VerticalAlignment="Top" Height="190" IsHitTestVisible="False"
+                    Background="{StaticResource TopScrim}"/>
+
             <StackPanel x:Name="TitleBlock" Visibility="Collapsed"
-                        HorizontalAlignment="Left" VerticalAlignment="Top" Margin="44,36,0,0" IsHitTestVisible="False">
+                        HorizontalAlignment="Left" VerticalAlignment="Top"
+                        Margin="44,36,0,0" IsHitTestVisible="False">
                 <TextBlock Text="You're Watching" FontSize="12" Foreground="{StaticResource TextMuted}"/>
-                <TextBlock x:Name="TitleText" Text="" FontSize="27" FontWeight="Bold"
-                           Foreground="White" Margin="0,4,0,0" MaxWidth="700" TextTrimming="CharacterEllipsis"/>
-                <TextBlock x:Name="EpisodeText" Text="" FontSize="13" FontWeight="SemiBold"
+                <TextBlock x:Name="TitleText" FontSize="27" FontWeight="Bold" Foreground="White"
+                           Margin="0,4,0,0" MaxWidth="760" TextTrimming="CharacterEllipsis"/>
+                <TextBlock x:Name="EpisodeText" FontSize="13" FontWeight="SemiBold"
                            Foreground="{StaticResource Text}" Margin="0,6,0,0"/>
             </StackPanel>
 
-            <!-- bottom scrim + controls -->
-            <Grid VerticalAlignment="Bottom">
-                <Grid.Background>
-                    <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                        <GradientStop Color="#00000000" Offset="0"/>
-                        <GradientStop Color="#E6000000" Offset="1"/>
-                    </LinearGradientBrush>
-                </Grid.Background>
-                <StackPanel Margin="18,44,18,10">
-                    <Grid Margin="4,0,4,4">
-                        <TextBlock x:Name="TimeLabel" Text="00:00" FontSize="11.5" Foreground="{StaticResource Text}" HorizontalAlignment="Left"/>
-                        <TextBlock x:Name="DurationLabel" Text="00:00" FontSize="11.5" Foreground="{StaticResource Text}" HorizontalAlignment="Right"/>
+            <!-- ======================= bottom control bar ======================= -->
+            <Grid VerticalAlignment="Bottom" Background="{StaticResource BottomScrim}">
+                <StackPanel Margin="0,54,0,0">
+
+                    <!-- time row sits ABOVE the bar, padded; the bar itself is full-bleed -->
+                    <Grid Margin="18,0,18,5">
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
+                            <TextBlock x:Name="TimeLabel" Text="00:00" FontSize="11.5"
+                                       Foreground="{StaticResource Text}" VerticalAlignment="Center"/>
+                            <Border x:Name="EpPill" Visibility="Collapsed" Margin="10,0,0,0"
+                                    Background="#26FFFFFF" CornerRadius="4" Padding="6,2">
+                                <TextBlock x:Name="EpPillText" FontSize="9.5" FontWeight="SemiBold"
+                                           Foreground="{StaticResource Text}"/>
+                            </Border>
+                        </StackPanel>
+                        <TextBlock x:Name="DurationLabel" Text="00:00" FontSize="11.5"
+                                   Foreground="{StaticResource Text}" HorizontalAlignment="Right"/>
                     </Grid>
-                    <Slider x:Name="SeekSlider" Style="{StaticResource ModernSlider}"
-                            Minimum="0" Maximum="100"
-                            PreviewMouseLeftButtonDown="SeekSlider_MouseDown"
-                            PreviewMouseMove="SeekSlider_MouseMove"
-                            PreviewMouseLeftButtonUp="SeekSlider_MouseUp"/>
-                    <Grid Margin="0,6,0,0">
+
+                    <!-- full-bleed seek bar: no side margin, edge to edge -->
+                    <Grid>
+                        <Slider x:Name="SeekSlider" Style="{StaticResource SeekBar}"
+                                Minimum="0" Maximum="100" Margin="0"
+                                PreviewMouseLeftButtonDown="SeekSlider_MouseDown"
+                                PreviewMouseMove="SeekSlider_MouseMove"
+                                PreviewMouseLeftButtonUp="SeekSlider_MouseUp"
+                                MouseMove="SeekSlider_HoverMove"
+                                MouseLeave="SeekSlider_HoverLeave"/>
+                    </Grid>
+
+                    <!-- transport row -->
+                    <Grid Margin="10,8,10,10">
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Center">
-                            <Button Style="{StaticResource IconButton}" Content="&#xEB9E;" FontSize="18" Click="Rewind_Click" ToolTip="Back 10s"/>
-                            <Button x:Name="PlayPauseButton" Style="{StaticResource PlayButton}" Content="&#xE768;" Click="PlayPause_Click"/>
-                            <Button Style="{StaticResource IconButton}" Content="&#xEB9D;" FontSize="18" Click="Forward_Click" ToolTip="Forward 10s"/>
-                            <Button x:Name="VolumeButton" Style="{StaticResource IconButton}" Content="&#xE767;" FontSize="17"
-                                    Margin="10,0,2,0" Click="Mute_Click" ToolTip="Mute"/>
-                            <Slider x:Name="VolumeSlider" Style="{StaticResource ModernSlider}" Width="96"
+                            <Button Style="{StaticResource IconButton}" Tag="{StaticResource IconReplay}"
+                                    Click="Rewind_Click" ToolTip="Back 10s  (Left)"/>
+                            <Button x:Name="PlayPauseButton" Style="{StaticResource TransportButton}"
+                                    Tag="{StaticResource IconPlay}" Click="PlayPause_Click" ToolTip="Play/Pause  (Space)"/>
+                            <Button Style="{StaticResource IconButton}" Tag="{StaticResource IconForward}"
+                                    Click="Forward_Click" ToolTip="Forward 10s  (Right)"/>
+                            <Button x:Name="NextButton" Style="{StaticResource IconButton}" Tag="{StaticResource IconSkipNext}"
+                                    FontSize="17" Click="Next_Click" ToolTip="Next in queue  (&gt;)"/>
+
+                            <Button x:Name="VolumeButton" Style="{StaticResource IconButton}"
+                                    Tag="{StaticResource IconVolume}" FontSize="18" Margin="8,0,2,0"
+                                    Click="Mute_Click" ToolTip="Mute  (M)"/>
+                            <Slider x:Name="VolumeSlider" Style="{StaticResource MiniSlider}" Width="92"
                                     Minimum="0" Maximum="150" Value="35" IsMoveToPointEnabled="True"
                                     ValueChanged="Volume_ValueChanged" VerticalAlignment="Center"/>
-                            <StackPanel VerticalAlignment="Center" Margin="18,0,0,0" MaxWidth="340">
-                                <TextBlock x:Name="NowPlayingTitle" Text="Nothing playing" FontSize="12.5" FontWeight="SemiBold"
-                                           Foreground="White" TextTrimming="CharacterEllipsis"/>
-                                <TextBlock x:Name="NowPlayingSub" Text="Add files from the Episodes panel" FontSize="10.5"
-                                           Foreground="{StaticResource TextMuted}" TextTrimming="CharacterEllipsis" Margin="0,1,0,0"/>
+
+                            <StackPanel VerticalAlignment="Center" Margin="18,0,0,0" MaxWidth="320">
+                                <TextBlock x:Name="NowPlayingTitle" Text="Nothing playing" FontSize="12.5"
+                                           FontWeight="SemiBold" Foreground="White" TextTrimming="CharacterEllipsis"/>
+                                <TextBlock x:Name="NowPlayingSub" Text="Add files from the Episodes panel"
+                                           FontSize="10.5" Foreground="{StaticResource TextMuted}"
+                                           TextTrimming="CharacterEllipsis" Margin="0,1,0,0"/>
                             </StackPanel>
                         </StackPanel>
 
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                            <Button Style="{StaticResource IconButton}" Content="&#xE7F0;" Click="SubToggle_Click" ToolTip="Subtitles"/>
-                            <Button Style="{StaticResource IconButton}" Content="&#xE8D6;" Click="AudioCycle_Click" ToolTip="Audio track"/>
-                            <Button Style="{StaticResource IconButton}" Content="&#xE713;" Click="Settings_Click" ToolTip="Settings"/>
-                            <Button Style="{StaticResource IconButton}" Content="&#xE8A0;" Click="Sidebar_Click" ToolTip="Episodes panel"/>
-                            <Button Style="{StaticResource IconButton}" Content="&#xE740;" Click="Fullscreen_Click" ToolTip="Fullscreen"/>
+                            <Button Style="{StaticResource IconButton}" Tag="{StaticResource IconEpisodes}"
+                                    FontSize="18" Click="Episodes_Click" ToolTip="Queue  (Tab)"/>
+                            <Button Style="{StaticResource IconButton}" Tag="{StaticResource IconSubtitles}"
+                                    FontSize="18" Click="SubToggle_Click" ToolTip="Subtitles  (J)"/>
+                            <Button Style="{StaticResource IconButton}" Tag="{StaticResource IconAudioTrack}"
+                                    FontSize="18" Click="AudioCycle_Click" ToolTip="Audio track  (#)"/>
+                            <Button Style="{StaticResource IconButton}" Tag="{StaticResource IconSettings}"
+                                    FontSize="18" Click="Settings_Click" ToolTip="Settings"/>
+                            <Button Style="{StaticResource IconButton}" Tag="{StaticResource IconMore}"
+                                    FontSize="18" Click="More_Click" ToolTip="More options"/>
+                            <Button Style="{StaticResource IconButton}" Tag="{StaticResource IconPip}"
+                                    FontSize="18" Click="Pip_Click" ToolTip="Picture-in-picture  (Ctrl+P)"/>
+                            <Button x:Name="FullscreenButton" Style="{StaticResource IconButton}"
+                                    Tag="{StaticResource IconFullscreen}" FontSize="18"
+                                    Click="Fullscreen_Click" ToolTip="Fullscreen  (F)"/>
                         </StackPanel>
                     </Grid>
                 </StackPanel>
             </Grid>
 
-            <!-- settings panel -->
-            <Border x:Name="SettingsPanel" Visibility="Collapsed" HorizontalAlignment="Right" VerticalAlignment="Bottom"
-                    Margin="0,0,24,128" Background="#F2161616" CornerRadius="12" Width="330" Padding="14,10">
+            <!-- hover-scrub preview, positioned in code above the cursor -->
+            <Border x:Name="ScrubPreview" Visibility="Collapsed" VerticalAlignment="Bottom"
+                    HorizontalAlignment="Left" Background="{StaticResource Surface}"
+                    BorderBrush="{StaticResource Hairline}" BorderThickness="1" CornerRadius="8" Padding="3">
                 <StackPanel>
-                    <Grid Height="38">
-                        <TextBlock Text="Video Fit" FontSize="12.5" Foreground="{StaticResource Text}" VerticalAlignment="Center"/>
-                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                            <RadioButton x:Name="FitContain" Style="{StaticResource PillRadio}" Content="Contain" FontSize="10.5" IsChecked="True" GroupName="fit" Checked="Fit_Checked"/>
-                            <RadioButton x:Name="FitCover" Style="{StaticResource PillRadio}" Content="Cover" FontSize="10.5" GroupName="fit" Checked="Fit_Checked"/>
-                            <RadioButton x:Name="FitFill" Style="{StaticResource PillRadio}" Content="Fill" FontSize="10.5" GroupName="fit" Checked="Fit_Checked"/>
-                        </StackPanel>
-                    </Grid>
-                    <Grid Height="38">
-                        <TextBlock Text="Speed" FontSize="12.5" Foreground="{StaticResource Text}" VerticalAlignment="Center"/>
-                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                            <RadioButton x:Name="Speed1" Style="{StaticResource PillRadio}" Content="1x" FontSize="10.5" IsChecked="True" GroupName="speed" Checked="Speed_Checked"/>
-                            <RadioButton x:Name="Speed125" Style="{StaticResource PillRadio}" Content="1.25x" FontSize="10.5" GroupName="speed" Checked="Speed_Checked"/>
-                            <RadioButton x:Name="Speed15" Style="{StaticResource PillRadio}" Content="1.5x" FontSize="10.5" GroupName="speed" Checked="Speed_Checked"/>
-                            <RadioButton x:Name="Speed2" Style="{StaticResource PillRadio}" Content="2x" FontSize="10.5" GroupName="speed" Checked="Speed_Checked"/>
-                        </StackPanel>
-                    </Grid>
-                    <Grid Height="38">
-                        <TextBlock Text="Display" FontSize="12.5" Foreground="{StaticResource Text}" VerticalAlignment="Center"/>
-                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                            <RadioButton x:Name="DispSdr" Style="{StaticResource PillRadio}" Content="1440p SDR" FontSize="10.5" IsChecked="True" GroupName="disp" Checked="Display_Checked"/>
-                            <RadioButton x:Name="DispHdr" Style="{StaticResource PillRadio}" Content="4K HDR" FontSize="10.5" GroupName="disp" Checked="Display_Checked"/>
-                        </StackPanel>
-                    </Grid>
-                    <Border Height="1" Background="#22FFFFFF" Margin="0,4"/>
-                    <Grid Height="42">
-                        <StackPanel VerticalAlignment="Center">
-                            <TextBlock Text="Anime4K Upscaler" FontSize="12.5" Foreground="{StaticResource Text}"/>
-                            <TextBlock Text="GPU shader upscaling" FontSize="9.5" Foreground="{StaticResource TextMuted}"/>
-                        </StackPanel>
-                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                            <RadioButton x:Name="A4kOff" Style="{StaticResource PillRadio}" Content="Off" FontSize="10.5" IsChecked="True" GroupName="a4k" Checked="Anime4k_Checked"/>
-                            <RadioButton x:Name="A4kA" Style="{StaticResource PillRadio}" Content="A" FontSize="10.5" GroupName="a4k" Checked="Anime4k_Checked" ToolTip="Restore + upscale (most anime)"/>
-                            <RadioButton x:Name="A4kB" Style="{StaticResource PillRadio}" Content="B" FontSize="10.5" GroupName="a4k" Checked="Anime4k_Checked" ToolTip="Soft restore (blurry sources)"/>
-                            <RadioButton x:Name="A4kC" Style="{StaticResource PillRadio}" Content="C" FontSize="10.5" GroupName="a4k" Checked="Anime4k_Checked" ToolTip="Denoise + upscale (noisy sources)"/>
-                        </StackPanel>
-                    </Grid>
+                    <Border CornerRadius="5" ClipToBounds="True" Width="176" Height="99" Background="#101010">
+                        <Image x:Name="ScrubImage" Stretch="UniformToFill"/>
+                    </Border>
+                    <TextBlock x:Name="ScrubTime" HorizontalAlignment="Center" Margin="0,3,0,1"
+                               FontSize="11" Foreground="{StaticResource Text}"/>
                 </StackPanel>
             </Border>
         </Grid>
 
-        <!-- error/status toast. Deliberately OUTSIDE Chrome: a failure must stay
+        <!-- ========================== settings popup ==========================
+             Anchored bottom-right above the gear. Sub-panels replace the root list
+             in place, with a back chevron, rather than opening nested popups. -->
+        <Border x:Name="SettingsPanel" Visibility="Collapsed" Style="{StaticResource PanelSurface}"
+                HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,20,116" Width="330">
+            <Grid>
+                <!-- root list -->
+                <StackPanel x:Name="SettingsRoot" Margin="6">
+                    <Button Style="{StaticResource MenuRow}" Click="OpenPrefs_Click">
+                        <Grid>
+                            <StackPanel Orientation="Horizontal">
+                                <Path Style="{StaticResource MenuRowIcon}" Data="{StaticResource IconPreferences}"/>
+                                <TextBlock Style="{StaticResource MenuRowLabel}" Text="Playback Preferences"/>
+                            </StackPanel>
+                            <Path Style="{StaticResource MenuRowIcon}" Data="{StaticResource IconChevronRight}"
+                                  HorizontalAlignment="Right" Width="13" Height="13"/>
+                        </Grid>
+                    </Button>
+
+                    <!-- Video Fit inlines its pills instead of drilling in -->
+                    <Grid Height="38" Margin="10,0">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <Path Style="{StaticResource MenuRowIcon}" Data="{StaticResource IconVideoFit}"/>
+                            <TextBlock Style="{StaticResource MenuRowLabel}" Text="Video Fit"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                            <RadioButton x:Name="FitContain" Style="{StaticResource PillRadio}" Content="Contain"
+                                         IsChecked="True" GroupName="fit" Checked="Fit_Checked"/>
+                            <RadioButton x:Name="FitCover" Style="{StaticResource PillRadio}" Content="Cover"
+                                         GroupName="fit" Checked="Fit_Checked"/>
+                            <RadioButton x:Name="FitFill" Style="{StaticResource PillRadio}" Content="Fill"
+                                         GroupName="fit" Checked="Fit_Checked"/>
+                        </StackPanel>
+                    </Grid>
+
+                    <Button x:Name="QualityRow" Style="{StaticResource MenuRow}" Visibility="Collapsed"
+                            Click="OpenQuality_Click">
+                        <Grid>
+                            <StackPanel Orientation="Horizontal">
+                                <Path Style="{StaticResource MenuRowIcon}" Data="{StaticResource IconQuality}"/>
+                                <TextBlock Style="{StaticResource MenuRowLabel}" Text="Quality"/>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                <TextBlock x:Name="QualityValue" Style="{StaticResource MenuRowValue}" Text="Auto"/>
+                                <Path Style="{StaticResource MenuRowIcon}" Data="{StaticResource IconChevronRight}"
+                                      Width="13" Height="13"/>
+                            </StackPanel>
+                        </Grid>
+                    </Button>
+
+                    <Button Style="{StaticResource MenuRow}" Click="OpenSpeed_Click">
+                        <Grid>
+                            <StackPanel Orientation="Horizontal">
+                                <Path Style="{StaticResource MenuRowIcon}" Data="{StaticResource IconSpeed}"/>
+                                <TextBlock Style="{StaticResource MenuRowLabel}" Text="Speed"/>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                <TextBlock x:Name="SpeedValue" Style="{StaticResource MenuRowValue}" Text="Normal"/>
+                                <Path Style="{StaticResource MenuRowIcon}" Data="{StaticResource IconChevronRight}"
+                                      Width="13" Height="13"/>
+                            </StackPanel>
+                        </Grid>
+                    </Button>
+
+                    <Button Style="{StaticResource MenuRow}" Click="OpenAudio_Click">
+                        <Grid>
+                            <StackPanel Orientation="Horizontal">
+                                <Path Style="{StaticResource MenuRowIcon}" Data="{StaticResource IconAudioTrack}"/>
+                                <TextBlock Style="{StaticResource MenuRowLabel}" Text="Audio"/>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                <TextBlock x:Name="AudioValue" Style="{StaticResource MenuRowValue}" Text="Default"/>
+                                <Path Style="{StaticResource MenuRowIcon}" Data="{StaticResource IconChevronRight}"
+                                      Width="13" Height="13"/>
+                            </StackPanel>
+                        </Grid>
+                    </Button>
+
+                    <Button Style="{StaticResource MenuRow}" Click="OpenSubs_Click">
+                        <Grid>
+                            <StackPanel Orientation="Horizontal">
+                                <Path Style="{StaticResource MenuRowIcon}" Data="{StaticResource IconSubtitles}"/>
+                                <TextBlock Style="{StaticResource MenuRowLabel}" Text="Subtitles"/>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                <TextBlock x:Name="SubsValue" Style="{StaticResource MenuRowValue}" Text="Off"/>
+                                <Path Style="{StaticResource MenuRowIcon}" Data="{StaticResource IconChevronRight}"
+                                      Width="13" Height="13"/>
+                            </StackPanel>
+                        </Grid>
+                    </Button>
+
+                    <Border Height="1" Background="{StaticResource Hairline}" Margin="10,5"/>
+
+                    <Button Style="{StaticResource MenuRow}" Click="OpenFilters_Click">
+                        <Grid>
+                            <StackPanel Orientation="Horizontal">
+                                <Path Style="{StaticResource MenuRowIcon}" Data="{StaticResource IconFilters}"/>
+                                <TextBlock Style="{StaticResource MenuRowLabel}" Text="Video Filters"/>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                <TextBlock x:Name="FiltersValue" Style="{StaticResource MenuRowValue}" Text="Off"/>
+                                <Path Style="{StaticResource MenuRowIcon}" Data="{StaticResource IconChevronRight}"
+                                      Width="13" Height="13"/>
+                            </StackPanel>
+                        </Grid>
+                    </Button>
+
+                    <Button Style="{StaticResource MenuRow}" Click="OpenUpscaler_Click">
+                        <Grid>
+                            <StackPanel Orientation="Horizontal">
+                                <Path Style="{StaticResource MenuRowIcon}" Data="{StaticResource IconUpscale}"/>
+                                <TextBlock Style="{StaticResource MenuRowLabel}" Text="Anime4K Upscaler"/>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                <TextBlock x:Name="UpscalerValue" Style="{StaticResource MenuRowValue}" Text="Off"/>
+                                <Path Style="{StaticResource MenuRowIcon}" Data="{StaticResource IconChevronRight}"
+                                      Width="13" Height="13"/>
+                            </StackPanel>
+                        </Grid>
+                    </Button>
+                </StackPanel>
+
+                <!-- drill-in sub-panel: header + generated rows -->
+                <StackPanel x:Name="SettingsSub" Visibility="Collapsed" Margin="6">
+                    <Button Style="{StaticResource MenuRow}" Click="SettingsBack_Click" Height="34">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Style="{StaticResource MenuRowIcon}" Data="{StaticResource IconChevronLeft}"
+                                  Width="13" Height="13" Stroke="{StaticResource Text}"/>
+                            <TextBlock x:Name="SubPanelTitle" Style="{StaticResource MenuRowLabel}"
+                                       FontWeight="SemiBold" Text="Back"/>
+                        </StackPanel>
+                    </Button>
+                    <Border Height="1" Background="{StaticResource Hairline}" Margin="10,2,10,4"/>
+                    <ScrollViewer MaxHeight="330" VerticalScrollBarVisibility="Auto">
+                        <StackPanel x:Name="SubPanelItems"/>
+                    </ScrollViewer>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- =========================== queue panel =========================== -->
+        <Border x:Name="EpisodesPanel" Visibility="Collapsed" Style="{StaticResource PanelSurface}"
+                HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,20,116"
+                Width="336" MaxHeight="460">
+            <DockPanel Margin="6">
+                <Grid DockPanel.Dock="Top">
+                    <TextBlock Style="{StaticResource SectionHeader}" Text="Q U E U E"/>
+                    <TextBlock x:Name="QueueCount" Style="{StaticResource SectionHeader}"
+                               HorizontalAlignment="Right" Text=""/>
+                </Grid>
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel x:Name="QueueItems"/>
+                </ScrollViewer>
+            </DockPanel>
+        </Border>
+
+        <!-- ======================== more options menu ======================== -->
+        <Border x:Name="MoreMenu" Visibility="Collapsed" Style="{StaticResource PanelSurface}"
+                HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,20,116" Width="300">
+            <StackPanel Margin="6">
+                <TextBlock Style="{StaticResource SectionHeader}" Text="M O R E   O P T I O N S"/>
+                <Button Style="{StaticResource MenuRow}" Click="Stats_Click">
+                    <Grid>
+                        <StackPanel Orientation="Horizontal">
+                            <Path Style="{StaticResource MenuRowIcon}" Data="{StaticResource IconStats}"/>
+                            <TextBlock Style="{StaticResource MenuRowLabel}" Text="Video Stats"/>
+                        </StackPanel>
+                        <TextBlock Style="{StaticResource ShortcutKey}" HorizontalAlignment="Right" Text="I"/>
+                    </Grid>
+                </Button>
+
+                <TextBlock Style="{StaticResource SectionHeader}" Text="S C R E E N S H O T S"/>
+                <Button Style="{StaticResource MenuRow}" Tag="s" Click="Screenshot_Click">
+                    <Grid>
+                        <StackPanel Orientation="Horizontal">
+                            <Path Style="{StaticResource MenuRowIcon}" Data="{StaticResource IconScreenshot}"/>
+                            <TextBlock Style="{StaticResource MenuRowLabel}" Text="Screenshot + Subtitles"/>
+                        </StackPanel>
+                        <TextBlock Style="{StaticResource ShortcutKey}" HorizontalAlignment="Right" Text="S"/>
+                    </Grid>
+                </Button>
+                <Button Style="{StaticResource MenuRow}" Tag="S" Click="Screenshot_Click">
+                    <Grid>
+                        <StackPanel Orientation="Horizontal">
+                            <Path Style="{StaticResource MenuRowIcon}" Data="{StaticResource IconScreenshot}"/>
+                            <TextBlock Style="{StaticResource MenuRowLabel}" Text="Screenshot (clean)"/>
+                        </StackPanel>
+                        <TextBlock Style="{StaticResource ShortcutKey}" HorizontalAlignment="Right" Text="Shift+S"/>
+                    </Grid>
+                </Button>
+                <Button Style="{StaticResource MenuRow}" Tag="Ctrl+s" Click="Screenshot_Click">
+                    <Grid>
+                        <StackPanel Orientation="Horizontal">
+                            <Path Style="{StaticResource MenuRowIcon}" Data="{StaticResource IconScreenshot}"/>
+                            <TextBlock Style="{StaticResource MenuRowLabel}" Text="Screenshot (as displayed)"/>
+                        </StackPanel>
+                        <TextBlock Style="{StaticResource ShortcutKey}" HorizontalAlignment="Right" Text="Ctrl+S"/>
+                    </Grid>
+                </Button>
+
+                <Border Height="1" Background="{StaticResource Hairline}" Margin="10,5"/>
+                <Button Style="{StaticResource MenuRow}" Click="Shortcuts_Click">
+                    <Grid>
+                        <StackPanel Orientation="Horizontal">
+                            <Path Style="{StaticResource MenuRowIcon}" Data="{StaticResource IconKeyboard}"/>
+                            <TextBlock Style="{StaticResource MenuRowLabel}" Text="Keyboard Shortcuts"/>
+                        </StackPanel>
+                        <TextBlock Style="{StaticResource ShortcutKey}" HorizontalAlignment="Right" Text="/"/>
+                    </Grid>
+                </Button>
+                <Button Style="{StaticResource MenuRow}" Click="OpenLogFolder_Click">
+                    <Grid>
+                        <StackPanel Orientation="Horizontal">
+                            <Path Style="{StaticResource MenuRowIcon}" Data="{StaticResource IconFolder}"/>
+                            <TextBlock Style="{StaticResource MenuRowLabel}" Text="Open log folder"/>
+                        </StackPanel>
+                    </Grid>
+                </Button>
+            </StackPanel>
+        </Border>
+
+        <!-- ====================== video processing modal ====================== -->
+        <Grid x:Name="VideoProcessing" Visibility="Collapsed" Background="#66000000">
+            <Border Style="{StaticResource PanelSurface}" Width="374" MaxHeight="560"
+                    HorizontalAlignment="Center" VerticalAlignment="Center">
+                <DockPanel Margin="14,12,14,12">
+                    <Grid DockPanel.Dock="Top" Margin="0,0,0,10">
+                        <TextBlock Text="Video Processing" FontSize="14" FontWeight="SemiBold"
+                                   Foreground="{StaticResource Text}" VerticalAlignment="Center"/>
+                        <Button Style="{StaticResource IconButton}" Tag="{StaticResource IconClose}"
+                                Width="28" Height="28" FontSize="13" HorizontalAlignment="Right"
+                                Click="CloseVideoProcessing_Click"/>
+                    </Grid>
+
+                    <Grid DockPanel.Dock="Top" Margin="0,0,0,10">
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                            <RadioButton x:Name="TabFilters" Style="{StaticResource PillRadio}" Content="Filters"
+                                         GroupName="vptab" Checked="VpTab_Checked"/>
+                            <RadioButton x:Name="TabAnime4k" Style="{StaticResource PillRadio}" Content="Anime4K"
+                                         IsChecked="True" GroupName="vptab" Checked="VpTab_Checked"/>
+                        </StackPanel>
+                    </Grid>
+
+                    <TextBlock x:Name="GpuReadout" DockPanel.Dock="Top" FontSize="10.5"
+                               Foreground="{StaticResource Positive}" Margin="2,0,0,8"/>
+
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <Grid>
+                            <!-- ================ Anime4K tab ================ -->
+                            <StackPanel x:Name="Anime4kTab">
+                                <CheckBox x:Name="UpscalerEnabled" Content="Enable Upscaler" Foreground="{StaticResource Text}"
+                                          FontSize="12.5" Margin="2,0,0,10" Focusable="False"
+                                          Checked="UpscalerEnabled_Changed" Unchecked="UpscalerEnabled_Changed"/>
+
+                                <TextBlock Style="{StaticResource SectionHeader}" Text="P R E S E T" Margin="2,0,0,4"/>
+                                <UniformGrid x:Name="PresetGrid" Columns="3">
+                                    <RadioButton x:Name="A4kA" Style="{StaticResource PresetTile}" GroupName="a4k" Checked="Anime4k_Checked">
+                                        <StackPanel>
+                                            <TextBlock Style="{StaticResource PresetTileTitle}" Text="Mode A"/>
+                                            <TextBlock Style="{StaticResource PresetTileSub}" Text="Most 1080p"/>
+                                        </StackPanel>
+                                    </RadioButton>
+                                    <RadioButton x:Name="A4kB" Style="{StaticResource PresetTile}" GroupName="a4k" Checked="Anime4k_Checked">
+                                        <StackPanel>
+                                            <TextBlock Style="{StaticResource PresetTileTitle}" Text="Mode B"/>
+                                            <TextBlock Style="{StaticResource PresetTileSub}" Text="Soft restore"/>
+                                        </StackPanel>
+                                    </RadioButton>
+                                    <RadioButton x:Name="A4kC" Style="{StaticResource PresetTile}" GroupName="a4k" Checked="Anime4k_Checked">
+                                        <StackPanel>
+                                            <TextBlock Style="{StaticResource PresetTileTitle}" Text="Mode C"/>
+                                            <TextBlock Style="{StaticResource PresetTileSub}" Text="Denoise"/>
+                                        </StackPanel>
+                                    </RadioButton>
+                                    <RadioButton x:Name="A4kAA" Style="{StaticResource PresetTile}" GroupName="a4k" Checked="Anime4k_Checked">
+                                        <StackPanel>
+                                            <TextBlock Style="{StaticResource PresetTileTitle}" Text="A+A"/>
+                                            <TextBlock Style="{StaticResource PresetTileSub}" Text="Best quality"/>
+                                        </StackPanel>
+                                    </RadioButton>
+                                    <RadioButton x:Name="A4kBB" Style="{StaticResource PresetTile}" GroupName="a4k" Checked="Anime4k_Checked">
+                                        <StackPanel>
+                                            <TextBlock Style="{StaticResource PresetTileTitle}" Text="B+B"/>
+                                            <TextBlock Style="{StaticResource PresetTileSub}" Text="Double soft"/>
+                                        </StackPanel>
+                                    </RadioButton>
+                                    <RadioButton x:Name="A4kCA" Style="{StaticResource PresetTile}" GroupName="a4k" Checked="Anime4k_Checked">
+                                        <StackPanel>
+                                            <TextBlock Style="{StaticResource PresetTileTitle}" Text="C+A"/>
+                                            <TextBlock Style="{StaticResource PresetTileSub}" Text="Denoise + A"/>
+                                        </StackPanel>
+                                    </RadioButton>
+                                </UniformGrid>
+
+                                <TextBlock Style="{StaticResource SectionHeader}" Text="L I N E   E F F E C T S   ( O P T I O N A L )" Margin="2,12,0,4"/>
+                                <CheckBox x:Name="DarkenLines" Foreground="{StaticResource Text}" FontSize="12"
+                                          Margin="4,2,0,6" Focusable="False"
+                                          Checked="LineEffect_Changed" Unchecked="LineEffect_Changed">
+                                    <StackPanel>
+                                        <TextBlock Text="Darken Lines" Foreground="{StaticResource Text}" FontSize="12"/>
+                                        <TextBlock Text="Makes outlines bolder" Foreground="{StaticResource TextMuted}" FontSize="9.5"/>
+                                    </StackPanel>
+                                </CheckBox>
+                                <CheckBox x:Name="ThinLines" Foreground="{StaticResource Text}" FontSize="12"
+                                          Margin="4,2,0,6" Focusable="False"
+                                          Checked="LineEffect_Changed" Unchecked="LineEffect_Changed">
+                                    <StackPanel>
+                                        <TextBlock Text="Thin Lines" Foreground="{StaticResource Text}" FontSize="12"/>
+                                        <TextBlock Text="Refines line weight" Foreground="{StaticResource TextMuted}" FontSize="9.5"/>
+                                    </StackPanel>
+                                </CheckBox>
+
+                                <TextBlock Style="{StaticResource SectionHeader}" Text="P E R F O R M A N C E" Margin="2,10,0,4"/>
+                                <Grid Margin="4,0,4,2">
+                                    <TextBlock Text="Shader tier" FontSize="12" Foreground="{StaticResource Text}"
+                                               VerticalAlignment="Center"/>
+                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                        <RadioButton x:Name="TierVL" Style="{StaticResource PillRadio}" Content="VL"
+                                                     IsChecked="True" GroupName="tier" Checked="Tier_Checked"/>
+                                        <RadioButton x:Name="TierL" Style="{StaticResource PillRadio}" Content="L"
+                                                     GroupName="tier" Checked="Tier_Checked"/>
+                                        <RadioButton x:Name="TierM" Style="{StaticResource PillRadio}" Content="M"
+                                                     GroupName="tier" Checked="Tier_Checked"/>
+                                        <RadioButton x:Name="TierS" Style="{StaticResource PillRadio}" Content="S"
+                                                     GroupName="tier" Checked="Tier_Checked"/>
+                                    </StackPanel>
+                                </Grid>
+                                <TextBlock Text="Larger tiers look better and cost more GPU. Anime4K only helps drawn line-art; it does nothing for live action."
+                                           FontSize="9.5" Foreground="{StaticResource TextMuted}" TextWrapping="Wrap" Margin="4,4,4,10"/>
+
+                                <Button Style="{StaticResource TextButton}" Click="ResetUpscaler_Click" Margin="2,4,2,0">
+                                    <StackPanel Orientation="Horizontal">
+                                        <Path Style="{StaticResource IconPath}" Data="{StaticResource IconReset}"
+                                              Width="13" Height="13" Stroke="{StaticResource Text}" Margin="0,0,7,0"/>
+                                        <TextBlock Text="Reset Upscaler Settings"/>
+                                    </StackPanel>
+                                </Button>
+                            </StackPanel>
+
+                            <!-- ================ Filters tab ================ -->
+                            <StackPanel x:Name="FiltersTab" Visibility="Collapsed"/>
+                        </Grid>
+                    </ScrollViewer>
+                </DockPanel>
+            </Border>
+        </Grid>
+
+        <!-- ======================== shortcuts overlay ======================== -->
+        <Grid x:Name="ShortcutsOverlay" Visibility="Collapsed" Background="#D9000000"
+              MouseLeftButtonDown="CloseShortcuts_Click">
+            <Border Style="{StaticResource PanelSurface}" MaxWidth="880" MaxHeight="700"
+                    HorizontalAlignment="Center" VerticalAlignment="Center">
+                <DockPanel Margin="20,16,20,18">
+                    <Grid DockPanel.Dock="Top" Margin="0,0,0,12">
+                        <TextBlock Text="Keyboard Shortcuts" FontSize="16" FontWeight="SemiBold"
+                                   Foreground="{StaticResource Text}"/>
+                        <Button Style="{StaticResource IconButton}" Tag="{StaticResource IconClose}"
+                                Width="28" Height="28" FontSize="13" HorizontalAlignment="Right"
+                                Click="CloseShortcuts_Click"/>
+                    </Grid>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <ItemsControl x:Name="ShortcutColumns">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate><UniformGrid Columns="3"/></ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </DockPanel>
+            </Border>
+        </Grid>
+
+        <!-- Error/status toast. Deliberately OUTSIDE Chrome: a failure must stay
              visible even after the controls have auto-hidden. -->
         <Border x:Name="Toast" Visibility="Collapsed"
-                HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,120"
-                Background="#F2181818" BorderBrush="#22FFFFFF" BorderThickness="1"
-                CornerRadius="10" Padding="16,10" MaxWidth="520" IsHitTestVisible="False">
-            <TextBlock x:Name="ToastText" Text="" FontSize="12.5" Foreground="{StaticResource Text}"
-                       TextWrapping="Wrap"/>
+                HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,132"
+                Style="{StaticResource PanelSurface}" Padding="16,10" MaxWidth="560" IsHitTestVisible="False">
+            <TextBlock x:Name="ToastText" FontSize="12.5" Foreground="{StaticResource Text}" TextWrapping="Wrap"/>
         </Border>
     </Grid>
 </Window>

@@ -45,6 +45,8 @@ public partial class MainWindow : Window
     private volatile bool _closing;
     private WindowState _preFullscreenState;
     private Rect _preFullscreenBounds;
+    private bool _isPip;
+    private Rect _prePipBounds;
 
     // Resume is applied when the restored file's duration arrives (seeking right
     // after loadfile fails). It is bound to the path it was recorded for so that
@@ -332,6 +334,7 @@ public partial class MainWindow : Window
         }
 
         _overlay?.SetNowPlaying(item.Name, item.Folder);
+        PushQueuePosition();
         Log.Info($"now playing: {path}");
     }
 
@@ -588,7 +591,86 @@ public partial class MainWindow : Window
                 e.Handled = true;
                 Fire.AndForget(ipc?.KeyPress("PGDWN"), "previous chapter");
                 break;
+            case Key.Tab:
+                e.Handled = true;
+                _overlay?.ToggleQueuePanel();
+                break;
+            case Key.OemQuestion:
+            case Key.Divide:
+                e.Handled = true;
+                _overlay?.ToggleShortcuts();
+                break;
+            case Key.P when Keyboard.Modifiers == ModifierKeys.Control:
+                e.Handled = true;
+                TogglePictureInPicture();
+                break;
         }
+    }
+
+    // --- queue ---------------------------------------------------------------
+
+    public IReadOnlyList<PlaylistItem> QueueSnapshot() => _playlist.ToList();
+
+    public bool IsCurrent(PlaylistItem item) => _currentItem != null && _currentItem.Matches(item.Path);
+
+    public void PlayQueueIndex(int index)
+    {
+        if (index < 0 || index >= _playlist.Count) return;
+        PlaylistBox.SelectedItem = _playlist[index];
+        PlayItem(_playlist[index]);
+    }
+
+    private void PushQueuePosition()
+    {
+        var index = _currentItem == null ? -1 : _playlist.IndexOf(_currentItem);
+        _overlay?.SetQueuePosition(index, _playlist.Count);
+    }
+
+    // --- picture-in-picture --------------------------------------------------
+
+    // A small always-on-top window in the corner. Deliberately not the fullscreen
+    // path: that one relies on the window staying non-topmost so the shell's
+    // native fullscreen detection works, and Topmost would break it.
+    public void TogglePictureInPicture()
+    {
+        if (_isFullscreen) ToggleFullscreen();
+
+        if (_isPip)
+        {
+            _isPip = false;
+            Topmost = false;
+            TitleBar.Visibility = Visibility.Visible;
+            TitleRow.Height = new GridLength(40);
+            if (_sidebarVisible)
+            {
+                Sidebar.Visibility = Visibility.Visible;
+                SidebarCol.Width = new GridLength(300);
+            }
+            Left = _prePipBounds.Left;
+            Top = _prePipBounds.Top;
+            Width = _prePipBounds.Width;
+            Height = _prePipBounds.Height;
+        }
+        else
+        {
+            _isPip = true;
+            _prePipBounds = WindowState == WindowState.Normal
+                ? new Rect(Left, Top, Width, Height)
+                : RestoreBounds;
+            WindowState = WindowState.Normal;
+            TitleBar.Visibility = Visibility.Collapsed;
+            TitleRow.Height = new GridLength(0);
+            Sidebar.Visibility = Visibility.Collapsed;
+            SidebarCol.Width = new GridLength(0);
+
+            var work = SystemParameters.WorkArea;
+            Width = 480;
+            Height = 280;
+            Left = work.Right - Width - 24;
+            Top = work.Bottom - Height - 24;
+            Topmost = true;
+        }
+        AfterLayoutRefresh();
     }
 
     // Forward printable keys to mpv so its own default bindings work
@@ -602,7 +684,7 @@ public partial class MainWindow : Window
         // Skip keys the app handles itself: a handled KeyDown does NOT suppress
         // TextInput in WPF, so without this they would reach mpv too and
         // double-trigger. 'q' would quit mpv's engine outright.
-        if (ch is " " or "q" or "Q" or "f" or "F" or "m" or "M") return;
+        if (ch is " " or "q" or "Q" or "f" or "F" or "m" or "M" or "/") return;
 
         e.Handled = true;
         Fire.AndForget(Ipc.KeyPress(ch), "forward key to mpv");

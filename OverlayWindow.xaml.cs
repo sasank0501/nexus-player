@@ -1,14 +1,18 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Interop;
+using System.Windows.Media;
+// alias: System.IO.Path is used here too, and bare `Path` is ambiguous
+using ShapePath = System.Windows.Shapes.Path;
 using System.Windows.Threading;
 
 namespace MpvFrontend;
@@ -17,43 +21,42 @@ public partial class OverlayWindow : Window
 {
     private readonly MainWindow _main;
     private readonly DispatcherTimer _hideTimer;
+
     private bool _isSeeking;
     private double _duration;
     private bool _muted;
-    private bool _ready; // suppress Checked events fired during InitializeComponent
+    private bool _ready;              // suppresses Checked events raised during InitializeComponent
     private bool _isFullscreen;
     private bool _suppressVolumeEcho;
+    private bool _pointerOverChrome;  // debounces auto-hide against a resting cursor
     private DispatcherTimer? _toastTimer;
+    private DispatcherTimer? _clickTimer;
 
-    // Segoe Fluent glyphs as escapes rather than literal PUA characters
-    private const string PlayGlyph   = "\uE768";
-    private const string PauseGlyph  = "\uE769";
-    private const string VolumeGlyph = "\uE767";
-    private const string MuteGlyph   = "\uE74F";
-
-    private static readonly string ShaderDir =
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData).Replace('\\', '/') + "/mpv/shaders/Anime4K";
+    private static readonly string ShaderDir = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "mpv", "shaders", "Anime4K");
 
     public OverlayWindow(MainWindow main)
     {
         _main = main;
         InitializeComponent();
+        BuildFiltersTab();
+        BuildShortcutsOverlay();
         _ready = true;
-        SettingsPanel.Visibility = Visibility.Collapsed;
-        // No KeyDown hook here: this window is WS_EX_NOACTIVATE and can never take
-        // focus, so its key events never fire. v1 carried that handler as dead code.
+
         PreviewTextInput += (_, e) => _main.ForwardTextToMpv(e);
+
         _hideTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2.6) };
         _hideTimer.Tick += (_, _) => HideChrome();
         _hideTimer.Start();
     }
 
     private MpvIpcClient? Ipc => _main.Ipc;
+    private Settings Config => _main.Config;
 
     // WS_EX_NOACTIVATE: clicks on the overlay must never make it the foreground
     // window. The main (non-layered) window then stays foreground, which lets
     // Windows' native fullscreen detection put the taskbar behind the video —
-    // the same mechanism VLC/mpv rely on. Keyboard also always stays on main.
+    // the same mechanism VLC and mpv rely on. Keyboard also always stays on main.
     protected override void OnSourceInitialized(EventArgs e)
     {
         base.OnSourceInitialized(e);
@@ -72,9 +75,9 @@ public partial class OverlayWindow : Window
         const int MA_NOACTIVATE = 3;
         if (msg == WM_MOUSEACTIVATE)
         {
-            // the overlay must never activate, but the click should still focus the
-            // player: without this, clicking the video while another app is foreground
-            // leaves keyboard focus (and all hotkeys) in that app
+            // The overlay must never activate, but the click should still focus the
+            // player: without this, clicking the video while another app is
+            // foreground leaves keyboard focus, and every hotkey, in that app.
             if (!_main.IsActive) _main.Activate();
             handled = true;
             return new IntPtr(MA_NOACTIVATE);
@@ -84,8 +87,9 @@ public partial class OverlayWindow : Window
 
     [DllImport("user32.dll")] private static extern int GetWindowLong(IntPtr hwnd, int index);
     [DllImport("user32.dll")] private static extern int SetWindowLong(IntPtr hwnd, int index, int value);
+    [DllImport("user32.dll")] private static extern int GetDoubleClickTime();
 
-    // --- called by MainWindow from mpv events ---
+    // ================= state pushed in from mpv observers =================
 
     public void UpdateTime(double pos)
     {
@@ -100,7 +104,12 @@ public partial class OverlayWindow : Window
         DurationLabel.Text = Fmt(dur);
     }
 
-    public void UpdatePause(bool paused) => PlayPauseButton.Content = paused ? PlayGlyph : PauseGlyph;
+    public void UpdatePause(bool paused)
+    {
+        PlayPauseButton.Tag = FindResource(paused ? "IconPlay" : "IconPause");
+        // a paused player keeps its controls up: hiding them mid-pause reads as a freeze
+        if (paused) ShowChrome();
+    }
 
     public void SetNowPlaying(string title, string sub)
     {
@@ -111,12 +120,16 @@ public partial class OverlayWindow : Window
         TitleBlock.Visibility = Visibility.Visible;
     }
 
-    private static string Fmt(double s) =>
-        TimeSpan.FromSeconds(Math.Max(0, s)).ToString(s >= 3600 ? @"h\:mm\:ss" : @"mm\:ss");
-
-    // Volume, mute and speed are owned by mpv and observed back, so the UI can
-    // never drift from the engine the way v1's three separate copies of the
-    // volume did. These are the observer sinks.
+    public void SetQueuePosition(int index, int count)
+    {
+        if (count > 1 && index >= 0)
+        {
+            EpPillText.Text = $"EP {index + 1} / {count}";
+            EpPill.Visibility = Visibility.Visible;
+        }
+        else EpPill.Visibility = Visibility.Collapsed;
+        NextButton.IsEnabled = index >= 0 && index < count - 1;
+    }
 
     public void UpdateVolume(double volume)
     {
@@ -129,34 +142,41 @@ public partial class OverlayWindow : Window
     public void UpdateMute(bool muted)
     {
         _muted = muted;
-        VolumeButton.Content = muted ? MuteGlyph : VolumeGlyph;
+        VolumeButton.Tag = FindResource(muted ? "IconVolumeMuted" : "IconVolume");
     }
 
-    public void UpdateSpeed(double speed)
-    {
-        _ready = false; // radio Checked handlers would echo straight back to mpv
-        Speed1.IsChecked = Math.Abs(speed - 1.0) < 0.01;
-        Speed125.IsChecked = Math.Abs(speed - 1.25) < 0.01;
-        Speed15.IsChecked = Math.Abs(speed - 1.5) < 0.01;
-        Speed2.IsChecked = Math.Abs(speed - 2.0) < 0.01;
-        _ready = true;
-    }
+    public void UpdateSpeed(double speed) =>
+        SpeedValue.Text = Math.Abs(speed - 1.0) < 0.01 ? "Normal" : $"{speed:0.##}x";
 
-    public void ApplyPersistedState(Settings settings)
+    public void ApplyPersistedState(Settings s)
     {
         _ready = false;
-        FitContain.IsChecked = settings.VideoFit == "Contain";
-        FitCover.IsChecked = settings.VideoFit == "Cover";
-        FitFill.IsChecked = settings.VideoFit == "Fill";
+        FitContain.IsChecked = s.VideoFit == "Contain";
+        FitCover.IsChecked = s.VideoFit == "Cover";
+        FitFill.IsChecked = s.VideoFit == "Fill";
+        TierVL.IsChecked = s.ShaderTier == "VL";
+        TierL.IsChecked = s.ShaderTier == "L";
+        TierM.IsChecked = s.ShaderTier == "M";
+        TierS.IsChecked = s.ShaderTier == "S";
+        DarkenLines.IsChecked = s.Anime4kDarkenLines;
+        ThinLines.IsChecked = s.Anime4kThinLines;
+        UpscalerEnabled.IsChecked = s.Anime4kPreset != "Off";
+        SelectPresetRadio(s.Anime4kPreset);
         _ready = true;
-        UpdateVolume(settings.Volume);
-        UpdateMute(settings.Muted);
-        UpdateSpeed(settings.Speed);
+
+        UpdateVolume(s.Volume);
+        UpdateMute(s.Muted);
+        UpdateSpeed(s.Speed);
+        UpscalerValue.Text = PresetLabel(s.Anime4kPreset);
     }
 
-    public void SetFullscreenState(bool isFullscreen) => _isFullscreen = isFullscreen;
+    public void SetFullscreenState(bool isFullscreen)
+    {
+        _isFullscreen = isFullscreen;
+        FullscreenButton.Tag = FindResource(isFullscreen ? "IconFullscreenExit" : "IconFullscreen");
+    }
 
-    // Failures used to be completely invisible — a dead loadfile just left a black
+    // Failures used to be entirely invisible — a dead loadfile just left a black
     // frame. Anything routed through Log.UserError surfaces here.
     public void ShowToast(string message, int milliseconds = 5000)
     {
@@ -173,22 +193,38 @@ public partial class OverlayWindow : Window
         _toastTimer.Start();
     }
 
-    // --- auto-hide ---
+    private static string Fmt(double s) =>
+        TimeSpan.FromSeconds(Math.Max(0, s)).ToString(s >= 3600 ? @"h\:mm\:ss" : @"mm\:ss");
+
+    // ============================= auto-hide =============================
 
     private void Root_MouseMove(object sender, MouseEventArgs e)
     {
+        _pointerOverChrome = e.GetPosition(this).Y > ActualHeight - 130;
         ShowChrome();
+        RestartHideTimer();
+    }
+
+    private void Root_MouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        AdjustVolume(e.Delta > 0 ? 5 : -5);
+        ShowChrome();
+        RestartHideTimer();
+        e.Handled = true;
+    }
+
+    private void RestartHideTimer()
+    {
         _hideTimer.Stop();
         _hideTimer.Start();
     }
 
-    // scroll anywhere over the video = volume; wake the chrome so the slider is visible
-    private void Root_MouseWheel(object sender, MouseWheelEventArgs e)
-    {
-        AdjustVolume(e.Delta > 0 ? 5 : -5);
-        Root_MouseMove(sender, e);
-        e.Handled = true;
-    }
+    private bool AnyPanelOpen =>
+        SettingsPanel.Visibility == Visibility.Visible ||
+        EpisodesPanel.Visibility == Visibility.Visible ||
+        MoreMenu.Visibility == Visibility.Visible ||
+        VideoProcessing.Visibility == Visibility.Visible ||
+        ShortcutsOverlay.Visibility == Visibility.Visible;
 
     private void ShowChrome()
     {
@@ -197,37 +233,35 @@ public partial class OverlayWindow : Window
         ClickLayer.Cursor = Cursors.Arrow;
     }
 
+    // Never hide while a menu is open, a drag is in progress, or the cursor is
+    // resting over the controls. Timing purely from the last event is what makes
+    // other players flicker the bar in and out under a stationary cursor.
     private void HideChrome()
     {
+        if (_isSeeking || _pointerOverChrome || AnyPanelOpen) return;
         Chrome.Opacity = 0;
         Chrome.IsHitTestVisible = false;
-        SettingsPanel.Visibility = Visibility.Collapsed;
         ClickLayer.Cursor = Cursors.None;
     }
 
-    // --- video click ---
+    // =========================== click on video ===========================
 
-    // v1 toggled pause immediately and then toggled it back on the second click,
-    // which made the play icon visibly blink on every double-click-to-fullscreen.
-    // Hold the single-click action until the double-click window has passed.
-    private DispatcherTimer? _clickTimer;
-
-    [DllImport("user32.dll")] private static extern int GetDoubleClickTime();
-
+    // v1 toggled pause immediately and toggled it back on the second click, so the
+    // play icon visibly blinked on every double-click to fullscreen. Hold the
+    // single-click action until the double-click window has passed.
     private void ClickLayer_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         CancelPendingClick();
-
         if (e.ClickCount >= 2)
         {
             _main.ToggleFullscreen();
             return;
         }
-
         _clickTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(GetDoubleClickTime()) };
         _clickTimer.Tick += (_, _) =>
         {
             CancelPendingClick();
+            if (AnyPanelOpen) { CloseAllPanels(); return; }
             Fire.AndForget(Ipc?.TogglePause(), "click to pause");
         };
         _clickTimer.Start();
@@ -239,30 +273,31 @@ public partial class OverlayWindow : Window
         _clickTimer = null;
     }
 
-    // --- transport ---
+    // ============================== transport ==============================
 
-    private async void PlayPause_Click(object sender, RoutedEventArgs e) { if (Ipc != null) await Ipc.TogglePause(); }
-    private async void Rewind_Click(object sender, RoutedEventArgs e) { if (Ipc != null) await Ipc.SendAsync("seek", -10, "relative"); }
-    private async void Forward_Click(object sender, RoutedEventArgs e) { if (Ipc != null) await Ipc.SendAsync("seek", 10, "relative"); }
+    private void PlayPause_Click(object s, RoutedEventArgs e) => Fire.AndForget(Ipc?.TogglePause(), "toggle pause");
+    private void Rewind_Click(object s, RoutedEventArgs e) => Fire.AndForget(Ipc?.SeekRelative(-10), "seek back");
+    private void Forward_Click(object s, RoutedEventArgs e) => Fire.AndForget(Ipc?.SeekRelative(10), "seek forward");
+    private void Next_Click(object s, RoutedEventArgs e) => Fire.AndForget(Ipc?.PlaylistNext(), "next in queue");
+    private void Mute_Click(object s, RoutedEventArgs e) => ToggleMute();
+    private void Fullscreen_Click(object s, RoutedEventArgs e) => _main.ToggleFullscreen();
+    private void Pip_Click(object s, RoutedEventArgs e) => _main.TogglePictureInPicture();
 
-    private void Mute_Click(object sender, RoutedEventArgs e) => ToggleMute();
+    public void ToggleMute() => Fire.AndForget(Ipc?.SetProperty("mute", !_muted), "toggle mute");
 
-    public async void ToggleMute()
-    {
-        if (Ipc == null) return;
-        _muted = !_muted;
-        await Ipc.SendAsync("set_property", "mute", _muted);
-        VolumeButton.Content = _muted ? MuteGlyph : VolumeGlyph;
-    }
+    public void AdjustVolume(double delta) =>
+        VolumeSlider.Value = Math.Clamp(VolumeSlider.Value + delta, 0, 150);
 
     private void Volume_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
-        if (_suppressVolumeEcho) return; // value came from mpv; don't send it back
+        if (_suppressVolumeEcho) return; // the value came from mpv; don't send it back
         Fire.AndForget(Ipc?.SetVolume(e.NewValue), "set volume");
     }
 
-    // manual click/scrub: set value straight from the mouse x — WPF's own
-    // move-to-point is unreliable with a custom track template
+    // ================================ seeking ================================
+
+    // Manual click/scrub: set the value straight from the mouse x. WPF's own
+    // move-to-point silently does nothing with a custom track template.
     private void SetSeekFromMouse(MouseEventArgs e)
     {
         var x = e.GetPosition(SeekSlider).X;
@@ -277,176 +312,745 @@ public partial class OverlayWindow : Window
 
     private void SeekSlider_MouseMove(object sender, MouseEventArgs e)
     {
-        if (_isSeeking && e.LeftButton == MouseButtonState.Pressed)
-            SetSeekFromMouse(e);
+        if (_isSeeking && e.LeftButton == MouseButtonState.Pressed) SetSeekFromMouse(e);
     }
 
-    // fires for both clicks and thumb drags (thumb capture tunnels Preview events through the slider)
+    // Fires for both clicks and thumb drags (thumb capture tunnels preview events
+    // through the slider). SeekAbsolute awaits mpv's acknowledgement, so the
+    // _isSeeking guard stays up until position reports are trustworthy again —
+    // otherwise one stale pre-seek time-pos snaps the bar backwards.
     private async void SeekSlider_MouseUp(object sender, MouseButtonEventArgs e)
     {
-        if (_isSeeking && Ipc != null && _duration > 0)
-            await Ipc.SeekAbsolute(SeekSlider.Value / 100.0 * _duration);
-        _isSeeking = false;
+        try
+        {
+            if (_isSeeking && Ipc != null && _duration > 0)
+                await Ipc.SeekAbsolute(SeekSlider.Value / 100.0 * _duration);
+        }
+        catch (Exception ex) { Log.Error("seek failed", ex); }
+        finally { _isSeeking = false; }
     }
 
-    public void AdjustVolume(double delta) =>
-        VolumeSlider.Value = Math.Clamp(VolumeSlider.Value + delta, 0, 150);
-
-    // --- right cluster ---
-
-    private async void SubToggle_Click(object sender, RoutedEventArgs e) => await ShowTrackMenu((Button)sender, "sub");
-    private async void AudioCycle_Click(object sender, RoutedEventArgs e) => await ShowTrackMenu((Button)sender, "audio");
-
-    private async Task ShowTrackMenu(Button anchor, string type)
+    // Hover readout on the bar. The frame preview itself needs a second headless
+    // mpv instance and lands with the thumbnail work; the timestamp is useful now.
+    private void SeekSlider_HoverMove(object sender, MouseEventArgs e)
     {
-        if (Ipc == null) return;
-        var tracks = await Ipc.RequestAsync("get_property", "track-list");
+        if (_duration <= 0) return;
+        var frac = Math.Clamp(e.GetPosition(SeekSlider).X / SeekSlider.ActualWidth, 0, 1);
+        ScrubTime.Text = Fmt(frac * _duration);
+        ScrubPreview.Visibility = Visibility.Visible;
+        var px = e.GetPosition(this).X;
+        ScrubPreview.Margin = new Thickness(
+            Math.Clamp(px - 91, 8, Math.Max(8, ActualWidth - 190)), 0, 0, 118);
+    }
 
-        var menu = new ContextMenu
-        {
-            PlacementTarget = anchor,
-            Placement = PlacementMode.Top,
-            Style = (Style)FindResource("TrackMenu"),
-        };
-        // the menu is its own popup: it would survive the chrome (with its anchor)
-        // fading away underneath it, so pause auto-hide while it's open
-        menu.Opened += (_, _) => _hideTimer.Stop();
-        menu.Closed += (_, _) => _hideTimer.Start();
+    private void SeekSlider_HoverLeave(object sender, MouseEventArgs e) =>
+        ScrubPreview.Visibility = Visibility.Collapsed;
 
-        var anySelected = false;
-        var items = new List<MenuItem>();
-        if (tracks.ValueKind == JsonValueKind.Array)
+    // =============================== panels ===============================
+
+    private void CloseAllPanels()
+    {
+        SettingsPanel.Visibility = Visibility.Collapsed;
+        EpisodesPanel.Visibility = Visibility.Collapsed;
+        MoreMenu.Visibility = Visibility.Collapsed;
+        VideoProcessing.Visibility = Visibility.Collapsed;
+        ShortcutsOverlay.Visibility = Visibility.Collapsed;
+        ShowSettingsRoot();
+    }
+
+    private void TogglePanel(FrameworkElement panel)
+    {
+        var wasOpen = panel.Visibility == Visibility.Visible;
+        CloseAllPanels();
+        panel.Visibility = wasOpen ? Visibility.Collapsed : Visibility.Visible;
+        ShowChrome();
+        RestartHideTimer();
+    }
+
+    private void Settings_Click(object s, RoutedEventArgs e) => TogglePanel(SettingsPanel);
+    private void More_Click(object s, RoutedEventArgs e) => TogglePanel(MoreMenu);
+    private void Episodes_Click(object s, RoutedEventArgs e) => ToggleQueuePanel();
+
+    public void ToggleQueuePanel()
+    {
+        RefreshQueue();
+        TogglePanel(EpisodesPanel);
+    }
+
+    public void ToggleShortcuts() => TogglePanel(ShortcutsOverlay);
+
+    // =========================== settings drill-in ===========================
+
+    private void ShowSettingsRoot()
+    {
+        SettingsRoot.Visibility = Visibility.Visible;
+        SettingsSub.Visibility = Visibility.Collapsed;
+        SubPanelItems.Children.Clear();
+    }
+
+    private void SettingsBack_Click(object s, RoutedEventArgs e) => ShowSettingsRoot();
+
+    private void ShowSubPanel(string title)
+    {
+        SubPanelTitle.Text = title;
+        SubPanelItems.Children.Clear();
+        SettingsRoot.Visibility = Visibility.Collapsed;
+        SettingsSub.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>One selectable row inside a drill-in panel, with an optional tick.</summary>
+    private void AddSubRow(string label, bool selected, Action onClick, string? detail = null)
+    {
+        var grid = new Grid();
+        var left = new StackPanel { Orientation = Orientation.Horizontal };
+
+        left.Children.Add(new ShapePath
         {
-            foreach (var t in tracks.EnumerateArray())
+            Style = (Style)FindResource("IconPath"),
+            Data = (Geometry)FindResource("IconCheck"),
+            Stroke = (Brush)FindResource("Text"),
+            Width = 13,
+            Height = 13,
+            VerticalAlignment = VerticalAlignment.Center,
+            Visibility = selected ? Visibility.Visible : Visibility.Hidden,
+        });
+
+        left.Children.Add(new TextBlock
+        {
+            Text = label,
+            Style = (Style)FindResource("MenuRowLabel"),
+            MaxWidth = 205,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            FontWeight = selected ? FontWeights.SemiBold : FontWeights.Normal,
+        });
+        grid.Children.Add(left);
+
+        if (detail != null)
+        {
+            grid.Children.Add(new TextBlock
             {
-                if (t.GetProperty("type").GetString() != type) continue;
-                var id = t.GetProperty("id").GetInt64();
-                var selected = t.TryGetProperty("selected", out var sel) && sel.GetBoolean();
-                anySelected |= selected;
+                Text = detail,
+                Style = (Style)FindResource("MenuRowValue"),
+                HorizontalAlignment = HorizontalAlignment.Right,
+            });
+        }
 
-                var item = MakeTrackItem(DescribeTrack(t), selected);
-                var prop = type == "audio" ? "aid" : "sid";
-                item.Click += async (_, _) =>
+        var button = new Button { Style = (Style)FindResource("MenuRow"), Content = grid };
+        button.Click += (_, _) => onClick();
+        SubPanelItems.Children.Add(button);
+    }
+
+    private void OpenPrefs_Click(object s, RoutedEventArgs e)
+    {
+        ShowSubPanel("Playback Preferences");
+        AddSubRow($"Library: {Config.LibraryRoots.Count} folder(s)", false,
+            () => ShowToast(string.Join("     ", Config.LibraryRoots), 7000));
+        AddSubRow("Open settings file", false, () => OpenInExplorer(AppPaths.SettingsFile));
+        AddSubRow("Open log folder", false, () => OpenInExplorer(AppPaths.LogFile));
+        AddSubRow($"mpv: {Path.GetFileName(Config.MpvPath ?? "auto-located")}", false,
+            () => ShowToast(Config.MpvPath ?? "Located automatically", 6000));
+    }
+
+    private void OpenSpeed_Click(object s, RoutedEventArgs e)
+    {
+        ShowSubPanel("Speed");
+        foreach (var value in new[] { 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0 })
+        {
+            var speed = value;
+            AddSubRow(Math.Abs(speed - 1.0) < 0.01 ? "Normal" : $"{speed:0.##}x",
+                Math.Abs(Config.Speed - speed) < 0.01,
+                () =>
                 {
-                    if (Ipc == null) return;
-                    await Ipc.SendAsync("set_property", prop, id);
-                    if (prop == "sid") await Ipc.SendAsync("set_property", "sub-visibility", true);
-                };
-                items.Add(item);
-            }
-        }
-
-        if (type == "sub" && items.Count > 0)
-        {
-            var off = MakeTrackItem("Off", !anySelected);
-            off.Click += async (_, _) => { if (Ipc != null) await Ipc.SendAsync("set_property", "sid", "no"); };
-            menu.Items.Add(off);
-        }
-        foreach (var item in items) menu.Items.Add(item);
-
-        if (menu.Items.Count == 0)
-            menu.Items.Add(MakeTrackItem(type == "audio" ? "No audio tracks" : "No subtitles", false, enabled: false));
-
-        menu.IsOpen = true;
-    }
-
-    private MenuItem MakeTrackItem(string label, bool selected, bool enabled = true) => new()
-    {
-        Header = label,
-        IsChecked = selected,
-        IsEnabled = enabled,
-        Style = (Style)FindResource("TrackMenuItem"),
-    };
-
-    private static string DescribeTrack(JsonElement t)
-    {
-        string? S(string key) =>
-            t.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
-
-        var channels = t.TryGetProperty("demux-channel-count", out var c) && c.TryGetInt32(out var n) ? n : 0;
-        var detail = string.Join(" • ", new[]
-        {
-            S("lang")?.ToUpperInvariant(),
-            S("codec")?.ToUpperInvariant(),
-            channels > 0 ? $"{channels}ch" : null,
-            t.TryGetProperty("forced", out var fr) && fr.GetBoolean() ? "forced" : null,
-        }.Where(s => !string.IsNullOrEmpty(s)));
-
-        var title = S("title");
-        if (!string.IsNullOrEmpty(title))
-            return detail.Length > 0 ? $"{title}  ({detail})" : title;
-        return detail.Length > 0 ? detail : $"Track {t.GetProperty("id").GetInt64()}";
-    }
-    private void Sidebar_Click(object sender, RoutedEventArgs e) => _main.ToggleSidebar();
-    private void Fullscreen_Click(object sender, RoutedEventArgs e) => _main.ToggleFullscreen();
-
-    private void Settings_Click(object sender, RoutedEventArgs e) =>
-        SettingsPanel.Visibility = SettingsPanel.Visibility == Visibility.Visible
-            ? Visibility.Collapsed : Visibility.Visible;
-
-    // --- settings rows ---
-
-    private async void Fit_Checked(object sender, RoutedEventArgs e)
-    {
-        if (!_ready || Ipc == null) return;
-        if (FitFill.IsChecked == true)
-        {
-            await Ipc.SendAsync("set_property", "keepaspect", false);
-        }
-        else
-        {
-            await Ipc.SendAsync("set_property", "keepaspect", true);
-            await Ipc.SendAsync("set_property", "panscan", FitCover.IsChecked == true ? 1.0 : 0.0);
+                    Fire.AndForget(Ipc?.SetProperty("speed", speed), "set speed");
+                    ShowSettingsRoot();
+                });
         }
     }
 
-    private async void Speed_Checked(object sender, RoutedEventArgs e)
+    private void OpenQuality_Click(object s, RoutedEventArgs e)
     {
-        if (!_ready || Ipc == null) return;
-        double speed = Speed2.IsChecked == true ? 2.0
-                     : Speed15.IsChecked == true ? 1.5
-                     : Speed125.IsChecked == true ? 1.25 : 1.0;
-        await Ipc.SendAsync("set_property", "speed", speed);
+        ShowSubPanel("Quality");
+        foreach (var entry in new[]
+                 {
+                     ("Auto (best)", "bestvideo+bestaudio/best"),
+                     ("2160p", "bestvideo[height<=2160]+bestaudio/best"),
+                     ("1440p", "bestvideo[height<=1440]+bestaudio/best"),
+                     ("1080p", "bestvideo[height<=1080]+bestaudio/best"),
+                     ("720p", "bestvideo[height<=720]+bestaudio/best"),
+                 })
+        {
+            var (label, format) = entry;
+            AddSubRow(label, QualityValue.Text == label, () =>
+            {
+                QualityValue.Text = label;
+                Fire.AndForget(Ipc?.SetProperty("ytdl-format", format), "set quality");
+                ShowToast("Quality applies to the next link you play.", 4000);
+                ShowSettingsRoot();
+            });
+        }
     }
 
-    private async void Display_Checked(object sender, RoutedEventArgs e)
+    private void OpenAudio_Click(object s, RoutedEventArgs e) =>
+        Fire.AndForget(ShowTrackPanel("audio", "Audio", "aid", AudioValue), "audio tracks");
+
+    private void OpenSubs_Click(object s, RoutedEventArgs e) =>
+        Fire.AndForget(ShowTrackPanel("sub", "Subtitles", "sid", SubsValue), "subtitle tracks");
+
+    private void SubToggle_Click(object s, RoutedEventArgs e)
     {
-        if (!_ready || Ipc == null) return;
-        if (DispHdr.IsChecked == true)
-        {
-            await Ipc.SendAsync("apply-profile", "4k-hdr");
-        }
-        else
-        {
-            await Ipc.SendAsync("apply-profile", "4k-hdr", "restore");
-            // restore reverts the hint to mpv's auto default, which re-engages HDR
-            // passthrough on an HDR display — SDR must mean SDR on every monitor
-            await Ipc.SendAsync("set_property", "target-colorspace-hint", "no");
-        }
-        // target-* changes don't take effect until the swapchain re-negotiates
-        _main.NudgeVideoSurface();
+        CloseAllPanels();
+        SettingsPanel.Visibility = Visibility.Visible;
+        OpenSubs_Click(s, e);
     }
 
-    private async void Anime4k_Checked(object sender, RoutedEventArgs e)
+    private void AudioCycle_Click(object s, RoutedEventArgs e)
     {
-        if (!_ready || Ipc == null) return;
+        CloseAllPanels();
+        SettingsPanel.Visibility = Visibility.Visible;
+        OpenAudio_Click(s, e);
+    }
 
-        if (A4kOff.IsChecked == true)
+    /// <summary>
+    /// Track picker as a drill-in panel. Audio and subtitles stay independent
+    /// axes here — some streaming players tie subtitle choice to the audio dub,
+    /// which is precisely the behaviour worth not copying.
+    /// </summary>
+    private async Task ShowTrackPanel(string type, string title, string property, TextBlock valueLabel)
+    {
+        ShowSubPanel(title);
+        if (Ipc == null) return;
+
+        var tracks = await Ipc.RequestAsync("get_property", "track-list");
+        SubPanelItems.Children.Clear();
+
+        if (tracks.ValueKind != JsonValueKind.Array)
         {
-            await Ipc.SendAsync("change-list", "glsl-shaders", "clr", "");
+            AddSubRow("Nothing playing", false, () => { });
             return;
         }
 
-        string[] files = A4kA.IsChecked == true
-            ? new[] { "Anime4K_Clamp_Highlights", "Anime4K_Restore_CNN_VL", "Anime4K_Upscale_CNN_x2_VL",
-                      "Anime4K_AutoDownscalePre_x2", "Anime4K_AutoDownscalePre_x4", "Anime4K_Upscale_CNN_x2_M" }
-            : A4kB.IsChecked == true
-            ? new[] { "Anime4K_Clamp_Highlights", "Anime4K_Restore_CNN_Soft_VL", "Anime4K_Upscale_CNN_x2_VL",
-                      "Anime4K_AutoDownscalePre_x2", "Anime4K_AutoDownscalePre_x4", "Anime4K_Upscale_CNN_x2_M" }
-            : new[] { "Anime4K_Clamp_Highlights", "Anime4K_Upscale_Denoise_CNN_x2_VL",
-                      "Anime4K_AutoDownscalePre_x2", "Anime4K_AutoDownscalePre_x4", "Anime4K_Upscale_CNN_x2_M" };
+        var rows = new List<(string Label, string Detail, long Id, bool Selected)>();
+        var anySelected = false;
+        foreach (var t in tracks.EnumerateArray())
+        {
+            if (!t.TryGetProperty("type", out var ty) || ty.GetString() != type) continue;
+            var selected = t.TryGetProperty("selected", out var sel) && sel.ValueKind == JsonValueKind.True;
+            anySelected |= selected;
+            rows.Add((DescribeTrack(t), DetailOf(t), t.GetProperty("id").GetInt64(), selected));
+        }
 
-        var list = string.Join(";", Array.ConvertAll(files, f => $"{ShaderDir}/{f}.glsl"));
-        await Ipc.SendAsync("change-list", "glsl-shaders", "set", list);
+        if (type == "sub")
+        {
+            AddSubRow("Off", !anySelected, () =>
+            {
+                Fire.AndForget(Ipc?.SetProperty("sid", "no"), "disable subtitles");
+                valueLabel.Text = "Off";
+                ShowSettingsRoot();
+            });
+        }
+
+        foreach (var entry in rows)
+        {
+            var row = entry;
+            AddSubRow(row.Label, row.Selected, () =>
+            {
+                Fire.AndForget(Ipc?.SetProperty(property, row.Id), "select track");
+                if (property == "sid") Fire.AndForget(Ipc?.SetProperty("sub-visibility", true), "show subtitles");
+                valueLabel.Text = row.Label;
+                ShowSettingsRoot();
+            }, row.Detail);
+
+            if (row.Selected) valueLabel.Text = row.Label;
+        }
+
+        if (rows.Count == 0)
+            AddSubRow(type == "audio" ? "No audio tracks" : "No subtitles", false, () => { });
+    }
+
+    private static string DetailOf(JsonElement t)
+    {
+        string? S(string k) => t.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+        var channels = t.TryGetProperty("demux-channel-count", out var c) && c.TryGetInt32(out var n) ? n : 0;
+        return string.Join(" ", new[] { S("codec")?.ToUpperInvariant(), channels > 0 ? channels + "ch" : null }
+            .Where(x => !string.IsNullOrEmpty(x)));
+    }
+
+    private static string DescribeTrack(JsonElement t)
+    {
+        string? S(string k) => t.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+
+        var lang = S("lang");
+        var title = S("title");
+        var forced = t.TryGetProperty("forced", out var fr) && fr.ValueKind == JsonValueKind.True;
+
+        string name;
+        if (!string.IsNullOrWhiteSpace(lang) && !string.IsNullOrWhiteSpace(title))
+            name = LanguageName(lang!) + " - " + title;
+        else if (!string.IsNullOrWhiteSpace(title))
+            name = title!;
+        else if (!string.IsNullOrWhiteSpace(lang))
+            name = LanguageName(lang!);
+        else
+            name = "Track " + t.GetProperty("id").GetInt64();
+
+        return forced ? name + " (forced)" : name;
+    }
+
+    // Full language names rather than bare ISO codes: the library has HIN/TAM/TEL
+    // multi-audio releases and Japanese dual-audio anime, where "Track 2" says
+    // nothing useful.
+    private static string LanguageName(string code) => code.ToLowerInvariant() switch
+    {
+        "eng" or "en" => "English",
+        "jpn" or "ja" or "jp" => "Japanese",
+        "spa" or "es" or "spn" => "Spanish",
+        "fre" or "fra" or "fr" => "French",
+        "ger" or "deu" or "de" => "German",
+        "ita" or "it" => "Italian",
+        "por" or "pt" => "Portuguese",
+        "rus" or "ru" => "Russian",
+        "kor" or "ko" => "Korean",
+        "chi" or "zho" or "zh" => "Chinese",
+        "hin" or "hi" => "Hindi",
+        "tam" or "ta" => "Tamil",
+        "tel" or "te" => "Telugu",
+        "ara" or "ar" => "Arabic",
+        _ => code.ToUpperInvariant(),
+    };
+
+    // ======================== video processing modal ========================
+
+    private void OpenFilters_Click(object s, RoutedEventArgs e) => OpenVideoProcessing(filters: true);
+    private void OpenUpscaler_Click(object s, RoutedEventArgs e) => OpenVideoProcessing(filters: false);
+
+    private void OpenVideoProcessing(bool filters)
+    {
+        CloseAllPanels();
+        _ready = false;
+        TabFilters.IsChecked = filters;
+        TabAnime4k.IsChecked = !filters;
+        _ready = true;
+        Anime4kTab.Visibility = filters ? Visibility.Collapsed : Visibility.Visible;
+        FiltersTab.Visibility = filters ? Visibility.Visible : Visibility.Collapsed;
+        VideoProcessing.Visibility = Visibility.Visible;
+        Fire.AndForget(RefreshGpuReadout(), "gpu readout");
+    }
+
+    private void CloseVideoProcessing_Click(object s, RoutedEventArgs e) =>
+        VideoProcessing.Visibility = Visibility.Collapsed;
+
+    private void VpTab_Checked(object s, RoutedEventArgs e)
+    {
+        if (!_ready) return;
+        Anime4kTab.Visibility = TabAnime4k.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+        FiltersTab.Visibility = TabFilters.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    // The reference shows "WebGPU supported" here; the honest local equivalent is
+    // what mpv actually negotiated.
+    private async Task RefreshGpuReadout()
+    {
+        if (Ipc == null) return;
+        var api = await Ipc.GetStringAsync("gpu-api");
+        var hwdec = await Ipc.GetStringAsync("hwdec-current");
+        GpuReadout.Text = $"mpv {api ?? "gpu"} - hardware decode: {hwdec ?? "none"}";
+    }
+
+    // ============================ video filters ============================
+
+    // mpv's equalizer, built in code so each row costs one line rather than 20 of XAML.
+    private void BuildFiltersTab()
+    {
+        foreach (var entry in new[]
+                 {
+                     ("Brightness", "brightness"),
+                     ("Contrast", "contrast"),
+                     ("Saturation", "saturation"),
+                     ("Gamma", "gamma"),
+                     ("Hue", "hue"),
+                 })
+        {
+            var (label, property) = entry;
+            var grid = new Grid { Margin = new Thickness(4, 6, 4, 6) };
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(80) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(34) });
+
+            var name = new TextBlock
+            {
+                Text = label,
+                FontSize = 12,
+                Foreground = (Brush)FindResource("Text"),
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            Grid.SetColumn(name, 0);
+
+            var readout = new TextBlock
+            {
+                Text = "0",
+                FontSize = 11,
+                Foreground = (Brush)FindResource("TextMuted"),
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            Grid.SetColumn(readout, 2);
+
+            var slider = new Slider
+            {
+                Style = (Style)FindResource("MiniSlider"),
+                Minimum = -100,
+                Maximum = 100,
+                Value = 0,
+                IsMoveToPointEnabled = true,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(6, 0, 6, 0),
+            };
+            slider.ValueChanged += (_, ev) =>
+            {
+                readout.Text = ((int)ev.NewValue).ToString();
+                Fire.AndForget(Ipc?.SetProperty(property, (int)ev.NewValue), "set " + property);
+                FiltersValue.Text = AnyFilterActive() ? "Custom" : "Off";
+            };
+            Grid.SetColumn(slider, 1);
+
+            grid.Children.Add(name);
+            grid.Children.Add(slider);
+            grid.Children.Add(readout);
+            FiltersTab.Children.Add(grid);
+        }
+
+        var reset = new Button
+        {
+            Style = (Style)FindResource("TextButton"),
+            Content = "Reset Filters",
+            Margin = new Thickness(2, 10, 2, 0),
+        };
+        reset.Click += (_, _) =>
+        {
+            foreach (var slider in FilterSliders()) slider.Value = 0;
+            FiltersValue.Text = "Off";
+        };
+        FiltersTab.Children.Add(reset);
+    }
+
+    private IEnumerable<Slider> FilterSliders() =>
+        FiltersTab.Children.OfType<Grid>().SelectMany(g => g.Children.OfType<Slider>());
+
+    private bool AnyFilterActive() => FilterSliders().Any(s => Math.Abs(s.Value) > 0.5);
+
+    // ========================== Anime4K upscaler ==========================
+
+    // The official v4 chains. Clamp_Highlights leads every one; the doubled modes
+    // add a second restore pass after the first upscale. {T} is the tier picked in
+    // the Performance section — VL looks best, S is cheapest.
+    private static readonly Dictionary<string, string[]> Presets = new()
+    {
+        ["A"] = new[] { "Clamp_Highlights", "Restore_CNN_{T}", "Upscale_CNN_x2_{T}",
+                        "AutoDownscalePre_x2", "AutoDownscalePre_x4", "Upscale_CNN_x2_M" },
+        ["B"] = new[] { "Clamp_Highlights", "Restore_CNN_Soft_{T}", "Upscale_CNN_x2_{T}",
+                        "AutoDownscalePre_x2", "AutoDownscalePre_x4", "Upscale_CNN_x2_M" },
+        ["C"] = new[] { "Clamp_Highlights", "Upscale_Denoise_CNN_x2_{T}",
+                        "AutoDownscalePre_x2", "AutoDownscalePre_x4", "Upscale_CNN_x2_M" },
+        ["AA"] = new[] { "Clamp_Highlights", "Restore_CNN_{T}", "Upscale_CNN_x2_{T}",
+                         "Restore_CNN_M", "AutoDownscalePre_x2", "AutoDownscalePre_x4", "Upscale_CNN_x2_M" },
+        ["BB"] = new[] { "Clamp_Highlights", "Restore_CNN_Soft_{T}", "Upscale_CNN_x2_{T}",
+                         "AutoDownscalePre_x2", "AutoDownscalePre_x4", "Restore_CNN_Soft_M", "Upscale_CNN_x2_M" },
+        ["CA"] = new[] { "Clamp_Highlights", "Upscale_Denoise_CNN_x2_{T}",
+                         "AutoDownscalePre_x2", "AutoDownscalePre_x4", "Restore_CNN_M", "Upscale_CNN_x2_M" },
+    };
+
+    private static string PresetLabel(string key) => key switch
+    {
+        "A" => "Mode A",
+        "B" => "Mode B",
+        "C" => "Mode C",
+        "AA" => "Mode A+A",
+        "BB" => "Mode B+B",
+        "CA" => "Mode C+A",
+        _ => "Off",
+    };
+
+    private void SelectPresetRadio(string key)
+    {
+        A4kA.IsChecked = key == "A";
+        A4kB.IsChecked = key == "B";
+        A4kC.IsChecked = key == "C";
+        A4kAA.IsChecked = key == "AA";
+        A4kBB.IsChecked = key == "BB";
+        A4kCA.IsChecked = key == "CA";
+    }
+
+    private string CurrentPresetKey() =>
+        A4kA.IsChecked == true ? "A" :
+        A4kB.IsChecked == true ? "B" :
+        A4kC.IsChecked == true ? "C" :
+        A4kAA.IsChecked == true ? "AA" :
+        A4kBB.IsChecked == true ? "BB" :
+        A4kCA.IsChecked == true ? "CA" : "Off";
+
+    private void Anime4k_Checked(object s, RoutedEventArgs e)
+    {
+        if (!_ready) return;
+        _ready = false;
+        UpscalerEnabled.IsChecked = true;
+        _ready = true;
+        ApplyShaders();
+    }
+
+    private void Tier_Checked(object s, RoutedEventArgs e)
+    {
+        if (!_ready) return;
+        Config.ShaderTier = TierVL.IsChecked == true ? "VL"
+                          : TierL.IsChecked == true ? "L"
+                          : TierM.IsChecked == true ? "M" : "S";
+        ApplyShaders();
+    }
+
+    private void LineEffect_Changed(object s, RoutedEventArgs e)
+    {
+        if (!_ready) return;
+        Config.Anime4kDarkenLines = DarkenLines.IsChecked == true;
+        Config.Anime4kThinLines = ThinLines.IsChecked == true;
+        ApplyShaders();
+    }
+
+    private void UpscalerEnabled_Changed(object s, RoutedEventArgs e)
+    {
+        if (!_ready) return;
+        if (UpscalerEnabled.IsChecked == true && CurrentPresetKey() == "Off")
+        {
+            _ready = false;
+            A4kAA.IsChecked = true; // the reference defaults to A+A
+            _ready = true;
+        }
+        ApplyShaders();
+    }
+
+    private void ResetUpscaler_Click(object s, RoutedEventArgs e)
+    {
+        _ready = false;
+        UpscalerEnabled.IsChecked = false;
+        SelectPresetRadio("Off");
+        DarkenLines.IsChecked = false;
+        ThinLines.IsChecked = false;
+        TierVL.IsChecked = true;
+        _ready = true;
+
+        Config.ShaderTier = "VL";
+        Config.Anime4kDarkenLines = false;
+        Config.Anime4kThinLines = false;
+        ApplyShaders();
+    }
+
+    private void ApplyShaders()
+    {
+        if (Ipc == null) return;
+
+        var key = UpscalerEnabled.IsChecked == true ? CurrentPresetKey() : "Off";
+        Config.Anime4kPreset = key;
+        UpscalerValue.Text = PresetLabel(key);
+
+        if (key == "Off" || !Presets.TryGetValue(key, out var chain))
+        {
+            Fire.AndForget(Ipc.SendAsync("change-list", "glsl-shaders", "clr", ""), "clear shaders");
+            return;
+        }
+
+        var names = chain.Select(n => n.Replace("{T}", Config.ShaderTier)).ToList();
+        if (Config.Anime4kDarkenLines) names.Add("Darken_HQ");
+        if (Config.Anime4kThinLines) names.Add("Thin_HQ");
+
+        var paths = new List<string>();
+        var missing = new List<string>();
+        foreach (var n in names)
+        {
+            var file = Path.Combine(ShaderDir, "Anime4K_" + n + ".glsl");
+            if (File.Exists(file)) paths.Add(file.Replace('\\', '/'));
+            else missing.Add("Anime4K_" + n + ".glsl");
+        }
+
+        // A missing shader used to make the whole chain a silent no-op.
+        if (missing.Count > 0)
+        {
+            Log.UserError("Anime4K shaders missing: " + string.Join(", ", missing));
+            return;
+        }
+
+        Fire.AndForget(Ipc.SendAsync("change-list", "glsl-shaders", "set", string.Join(";", paths)), "apply shaders");
+        Log.Info($"Anime4K {PresetLabel(key)} tier {Config.ShaderTier}: {paths.Count} shaders");
+    }
+
+    // ============================== video fit ==============================
+
+    private void Fit_Checked(object s, RoutedEventArgs e)
+    {
+        if (!_ready || Ipc == null) return;
+        Config.VideoFit = FitFill.IsChecked == true ? "Fill"
+                        : FitCover.IsChecked == true ? "Cover" : "Contain";
+
+        if (Config.VideoFit == "Fill")
+        {
+            Fire.AndForget(Ipc.SetProperty("keepaspect", false), "video fit");
+        }
+        else
+        {
+            Fire.AndForget(Ipc.SetProperty("keepaspect", true), "video fit");
+            Fire.AndForget(Ipc.SetProperty("panscan", Config.VideoFit == "Cover" ? 1.0 : 0.0), "panscan");
+        }
+    }
+
+    // ============================ more options ============================
+
+    private void Stats_Click(object s, RoutedEventArgs e)
+    {
+        Fire.AndForget(Ipc?.KeyPress("i"), "toggle stats");
+        CloseAllPanels();
+    }
+
+    private void Screenshot_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: string key })
+            Fire.AndForget(Ipc?.KeyPress(key), "screenshot");
+        CloseAllPanels();
+    }
+
+    private void OpenLogFolder_Click(object s, RoutedEventArgs e)
+    {
+        OpenInExplorer(AppPaths.LogFile);
+        CloseAllPanels();
+    }
+
+    private static void OpenInExplorer(string path)
+    {
+        try
+        {
+            AppPaths.EnsureAll();
+            Process.Start(new ProcessStartInfo("explorer.exe", "/select,\"" + path + "\"") { UseShellExecute = true });
+        }
+        catch (Exception ex) { Log.Error("could not open explorer", ex); }
+    }
+
+    // ========================== shortcuts overlay ==========================
+
+    private void Shortcuts_Click(object s, RoutedEventArgs e) => TogglePanel(ShortcutsOverlay);
+
+    private void CloseShortcuts_Click(object s, RoutedEventArgs e) =>
+        ShortcutsOverlay.Visibility = Visibility.Collapsed;
+
+    // Built from KeyMap so the list can never drift from what the keys actually do.
+    private void BuildShortcutsOverlay()
+    {
+        foreach (var (group, items) in KeyMap.Groups)
+        {
+            var column = new StackPanel { Margin = new Thickness(0, 0, 26, 18) };
+            column.Children.Add(new TextBlock
+            {
+                Text = group.ToUpperInvariant(),
+                Style = (Style)FindResource("SectionHeader"),
+                Margin = new Thickness(0, 0, 0, 6),
+            });
+
+            foreach (var item in items)
+            {
+                var row = new Grid { Margin = new Thickness(0, 0, 0, 5) };
+                row.Children.Add(new TextBlock
+                {
+                    Text = item.Description,
+                    FontSize = 12,
+                    Foreground = (Brush)FindResource("Text"),
+                    MaxWidth = 175,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                });
+                row.Children.Add(new TextBlock
+                {
+                    Text = item.Keys,
+                    Style = (Style)FindResource("ShortcutKey"),
+                    HorizontalAlignment = HorizontalAlignment.Right,
+                });
+                column.Children.Add(row);
+            }
+            ShortcutColumns.Items.Add(column);
+        }
+    }
+
+    // =============================== queue ===============================
+
+    public void RefreshQueue()
+    {
+        QueueItems.Children.Clear();
+        var items = _main.QueueSnapshot();
+        QueueCount.Text = items.Count == 0 ? "" : items.Count + " ITEMS";
+
+        if (items.Count == 0)
+        {
+            QueueItems.Children.Add(new TextBlock
+            {
+                Text = "Nothing queued yet. Add files from the sidebar.",
+                FontSize = 11.5,
+                Foreground = (Brush)FindResource("TextMuted"),
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(10, 4, 10, 10),
+            });
+            return;
+        }
+
+        for (var i = 0; i < items.Count; i++)
+        {
+            var index = i;
+            var item = items[i];
+            var isCurrent = _main.IsCurrent(item);
+
+            var grid = new Grid();
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            var text = new StackPanel();
+            text.Children.Add(new TextBlock
+            {
+                Text = item.Name,
+                FontSize = 12.5,
+                FontWeight = isCurrent ? FontWeights.SemiBold : FontWeights.Normal,
+                Foreground = (Brush)FindResource("Text"),
+                TextTrimming = TextTrimming.CharacterEllipsis,
+            });
+            text.Children.Add(new TextBlock
+            {
+                Text = item.Folder,
+                FontSize = 10.5,
+                Foreground = (Brush)FindResource("TextMuted"),
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                Margin = new Thickness(0, 2, 0, 0),
+            });
+            grid.Children.Add(text);
+
+            if (isCurrent)
+            {
+                var tick = new ShapePath
+                {
+                    Style = (Style)FindResource("IconPath"),
+                    Data = (Geometry)FindResource("IconCheck"),
+                    Stroke = (Brush)FindResource("Text"),
+                    Width = 14,
+                    Height = 14,
+                    VerticalAlignment = VerticalAlignment.Center,
+                };
+                Grid.SetColumn(tick, 1);
+                grid.Children.Add(tick);
+            }
+
+            var button = new Button
+            {
+                Style = (Style)FindResource("MenuRow"),
+                Height = 50,
+                Content = grid,
+                Background = isCurrent ? (Brush)FindResource("SelectedOverlay") : Brushes.Transparent,
+            };
+            button.Click += (_, _) =>
+            {
+                _main.PlayQueueIndex(index);
+                CloseAllPanels();
+            };
+            QueueItems.Children.Add(button);
+        }
     }
 }

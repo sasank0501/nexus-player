@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Nexus Player" Height="760" Width="1280"
         Background="{StaticResource Bg0}"
-        FontFamily="Segoe UI Variable Display, Segoe UI"
+        FontFamily="{StaticResource UiFont}"
         WindowStyle="None">
     <WindowChrome.WindowChrome>
         <WindowChrome CaptionHeight="40" ResizeBorderThickness="6" GlassFrameThickness="0" CornerRadius="0"/>
@@ -18,19 +18,20 @@
         <!-- title bar -->
         <Grid x:Name="TitleBar" Grid.Row="0" Background="{StaticResource Bg0}">
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0">
-                <TextBlock Text="&#xE714;" FontFamily="{StaticResource IconFont}" FontSize="14"
-                           Foreground="{StaticResource Accent}" VerticalAlignment="Center"/>
-                <TextBlock Text="N E X U S  P L A Y E R" Margin="10,0,0,0" FontSize="11.5" FontWeight="SemiBold"
-                           Foreground="{StaticResource Text}" VerticalAlignment="Center"/>
+                <Path Style="{StaticResource IconPath}" Data="{StaticResource IconPlay}"
+                      Stroke="{StaticResource Accent}" Width="13" Height="13" VerticalAlignment="Center"/>
+                <TextBlock Text="N E X U S   P L A Y E R" Margin="10,0,0,0" FontSize="11.5"
+                           FontWeight="SemiBold" Foreground="{StaticResource Text}" VerticalAlignment="Center"/>
             </StackPanel>
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" WindowChrome.IsHitTestVisibleInChrome="True">
-                <Button Style="{StaticResource CaptionButton}" Content="&#xE921;" Click="MinButton_Click"/>
-                <Button Style="{StaticResource CaptionButton}" Content="&#xE922;" Click="MaxButton_Click"/>
-                <Button Style="{StaticResource CaptionButton}" Content="&#xE8BB;" Click="CloseButton_Click"/>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
+                        WindowChrome.IsHitTestVisibleInChrome="True">
+                <Button Style="{StaticResource CaptionButton}" Tag="{StaticResource IconMinimize}" Click="MinButton_Click"/>
+                <Button Style="{StaticResource CaptionButton}" Tag="{StaticResource IconMaximize}" Click="MaxButton_Click"/>
+                <Button Style="{StaticResource CaptionButton}" Tag="{StaticResource IconClose}" Click="CloseButton_Click"/>
             </StackPanel>
         </Grid>
 
-        <!-- body: full-bleed video + episodes sidebar -->
+        <!-- body: full-bleed video + queue sidebar -->
         <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
@@ -48,23 +49,25 @@
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
 
-                    <Grid Grid.Row="0" Margin="14,14,14,6">
-                        <TextBlock Text="Episodes" FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource Text}" VerticalAlignment="Center"/>
+                    <Grid Grid.Row="0" Margin="14,14,10,6">
+                        <TextBlock Text="Queue" FontSize="13" FontWeight="SemiBold"
+                                   Foreground="{StaticResource Text}" VerticalAlignment="Center"/>
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                            <Button Style="{StaticResource IconButton}" Width="32" Height="32" FontSize="13"
-                                    Content="&#xE71B;" Click="OpenUrlButton_Click" ToolTip="Open URL"/>
-                            <Button Style="{StaticResource IconButton}" Width="32" Height="32" FontSize="13"
-                                    Content="&#xE710;" Click="AddFilesButton_Click" ToolTip="Add files"/>
-                            <Button Style="{StaticResource IconButton}" Width="32" Height="32" FontSize="13"
-                                    Content="&#xE74D;" Click="RemoveButton_Click" ToolTip="Remove selected"/>
+                            <Button Style="{StaticResource IconButton}" Width="32" Height="32" FontSize="15"
+                                    Tag="{StaticResource IconLink}" Click="OpenUrlButton_Click" ToolTip="Open URL"/>
+                            <Button Style="{StaticResource IconButton}" Width="32" Height="32" FontSize="15"
+                                    Tag="{StaticResource IconPlus}" Click="AddFilesButton_Click" ToolTip="Add files"/>
+                            <Button Style="{StaticResource IconButton}" Width="32" Height="32" FontSize="15"
+                                    Tag="{StaticResource IconTrash}" Click="RemoveButton_Click" ToolTip="Remove selected"/>
                         </StackPanel>
                     </Grid>
 
                     <Border x:Name="UrlPanel" Grid.Row="1" Visibility="Collapsed"
                             Background="{StaticResource Bg2}" CornerRadius="8" Margin="14,2,14,6" Padding="10,4">
                         <DockPanel>
-                            <Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Width="28" Height="28" FontSize="12"
-                                    Content="&#xE768;" Click="PlayUrlButton_Click" ToolTip="Play URL"/>
+                            <Button DockPanel.Dock="Right" Style="{StaticResource IconButton}"
+                                    Width="28" Height="28" FontSize="14" Tag="{StaticResource IconPlay}"
+                                    Click="PlayUrlButton_Click" ToolTip="Play URL"/>
                             <TextBox x:Name="UrlBox" Background="Transparent" BorderThickness="0"
                                      Foreground="{StaticResource Text}" CaretBrush="White" FontSize="12"
                                      VerticalContentAlignment="Center" KeyDown="UrlBox_KeyDown"/>
@@ -80,7 +83,8 @@
                             <DataTemplate>
                                 <StackPanel ToolTip="{Binding Path}">
                                     <TextBlock Text="{Binding Name}" FontSize="12.5" TextTrimming="CharacterEllipsis"/>
-                                    <TextBlock Text="{Binding Folder}" FontSize="10.5" Foreground="{StaticResource TextMuted}"
+                                    <TextBlock Text="{Binding Folder}" FontSize="10.5"
+                                               Foreground="{StaticResource TextMuted}"
                                                TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
                                 </StackPanel>
                             </DataTemplate>

@@ -134,6 +134,11 @@ ICONS = {
                  "M 13,9.5 L 13,9.5 M 16.5,9.5 L 16.5,9.5 M 7.5,14 L 16.5,14"),
     "Reset": circular_arrow(clockwise=False),
 
+    # window caption
+    "Minimize": "M 5,12 L 19,12",
+    "Maximize": "M 5,5 L 19,5 L 19,19 L 5,19 Z",
+    "Restore": "M 8,8 L 8,5 L 19,5 L 19,16 L 16,16 M 5,8 L 16,8 L 16,19 L 5,19 Z",
+
     # misc chrome
     "ChevronRight": "M 9,5 L 16,12 L 9,19",
     "ChevronLeft": "M 15,5 L 8,12 L 15,19",
