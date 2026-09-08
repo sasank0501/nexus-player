@@ -168,7 +168,7 @@ HEADER = """<!--
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
     <Style x:Key="IconPath" TargetType="Path">
-        <Setter Property="StrokeThickness" Value="1.5"/>
+        <Setter Property="StrokeThickness" Value="1.7"/>
         <Setter Property="StrokeStartLineCap" Value="Round"/>
         <Setter Property="StrokeEndLineCap" Value="Round"/>
         <Setter Property="StrokeLineJoin" Value="Round"/>

@@ -53,6 +53,7 @@ public partial class MainWindow : Window
     // an auto-advance or a manual load can never inherit someone else's offset.
     private double? _pendingResume;
     private string? _pendingResumePath;
+    private string? _screenshotPath;   // file the screenshot folder is currently set for
 
     internal MpvIpcClient? Ipc { get; private set; }
     internal Settings Config => _settings;
@@ -346,33 +347,44 @@ public partial class MainWindow : Window
     private void OnMpvPathChanged(string path)
     {
         if (string.IsNullOrWhiteSpace(path)) return;
-        if (_currentItem != null && _currentItem.Matches(path)) return;
 
-        var item = _playlist.FirstOrDefault(i => i.Matches(path));
-        if (item == null)
+        if (_currentItem == null || !_currentItem.Matches(path))
         {
-            item = new PlaylistItem(path);
-            _playlist.Add(item);
+            var item = _playlist.FirstOrDefault(i => i.Matches(path));
+            if (item == null)
+            {
+                item = new PlaylistItem(path);
+                _playlist.Add(item);
+            }
+
+            _currentItem = item;
+            PlaylistBox.SelectedItem = item;
+
+            // the position counters belong to the file that just ended; clearing
+            // them stops the next save attributing an old offset to the new file
+            _lastTimePos = 0;
+            _lastSavedPos = 0;
+
+            // a resume offset is only ever valid for the file it was recorded against
+            if (!string.Equals(path, _pendingResumePath, StringComparison.OrdinalIgnoreCase))
+            {
+                _pendingResume = null;
+                _pendingResumePath = null;
+            }
+
+            ShowNowPlaying(item);
+            PushQueuePosition();
+            Log.Info($"now playing: {path}");
         }
 
-        _currentItem = item;
-        PlaylistBox.SelectedItem = item;
-
-        // the position counters belong to the file that just ended; clearing them
-        // stops the next save from attributing an old offset to the new file
-        _lastTimePos = 0;
-        _lastSavedPos = 0;
-
-        // a resume offset is only ever valid for the file it was recorded against
-        if (!string.Equals(path, _pendingResumePath, StringComparison.OrdinalIgnoreCase))
+        // Checked independently of whether the item changed. On a fresh start the
+        // restored file is already _currentItem, so gating this on a change left
+        // the screenshot folder pointing wherever mpv.conf last had it.
+        if (!string.Equals(_screenshotPath, path, StringComparison.OrdinalIgnoreCase))
         {
-            _pendingResume = null;
-            _pendingResumePath = null;
+            _screenshotPath = path;
+            ConfigureScreenshots(path);
         }
-
-        _overlay?.SetNowPlaying(item.Name, item.Folder);
-        PushQueuePosition();
-        Log.Info($"now playing: {path}");
     }
 
     private void ApplyPendingResume(double duration)
@@ -433,7 +445,7 @@ public partial class MainWindow : Window
 
         await Ipc.LoadFile(s.Path);
         await Ipc.SetPause(true); // show it, don't blast audio on launch
-        _overlay?.SetNowPlaying(item.Name, item.Folder);
+        ShowNowPlaying(item);
     }
 
     // --- window plumbing ---------------------------------------------------
@@ -657,6 +669,32 @@ public partial class MainWindow : Window
         PlayItem(_playlist[index]);
     }
 
+    // Release filenames are unreadable on screen ("[FLE] Re ZERO ... - S03E02v3
+    // (WEB 1080p H.264 E-AC-3) [Dual Audio] [82891140]"). Show the title and the
+    // episode instead, the way the reference player does.
+    private void ShowNowPlaying(PlaylistItem item) =>
+        _overlay?.SetNowPlaying(TitleCleaner.ShowTitle(item.Path), TitleCleaner.EpisodeLabel(item.Path));
+
+    // Screenshots go to Pictures/NexuSS/<show - season>/ so a session's grabs stay
+    // together instead of piling into one flat folder. mpv writes them itself;
+    // this just points it at the right place whenever the file changes.
+    private void ConfigureScreenshots(string path)
+    {
+        if (Ipc == null) return;
+        try
+        {
+            var root = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "NexuSS");
+            var dir = Path.Combine(root, TitleCleaner.FolderName(path));
+            Directory.CreateDirectory(dir);
+            Fire.AndForget(Ipc.SetProperty("screenshot-directory", dir), "screenshot directory");
+            // %F = file name without extension, %P = playback time
+            Fire.AndForget(Ipc.SetProperty("screenshot-template", "%F - %P"), "screenshot template");
+            Log.Info("screenshots -> " + dir);
+        }
+        catch (Exception ex) { Log.Error("could not set the screenshot folder", ex); }
+    }
+
     private void PushQueuePosition()
     {
         var index = _currentItem == null ? -1 : _playlist.IndexOf(_currentItem);
@@ -742,7 +780,7 @@ public partial class MainWindow : Window
         _pendingResume = null;   // the user picked this; don't inherit an old offset
         _pendingResumePath = null;
         Fire.AndForget(Ipc.LoadFile(item.Path), "load file");
-        _overlay?.SetNowPlaying(item.Name, item.Folder);
+        ShowNowPlaying(item);
     }
 
     // --- play from URL -----------------------------------------------------
@@ -792,7 +830,7 @@ public partial class MainWindow : Window
         _pendingResumePath = null;
 
         await Ipc.LoadFile(url);
-        _overlay?.SetNowPlaying(item.Name, item.Folder);
+        ShowNowPlaying(item);
 
         UrlBox.Clear();
         UrlPanel.Visibility = Visibility.Collapsed;
@@ -826,7 +864,7 @@ public partial class MainWindow : Window
             _pendingResume = null;
             _pendingResumePath = null;
             await Ipc.LoadFile(dlg.FileNames[0]);
-            _overlay?.SetNowPlaying(_playlist[0].Name, _playlist[0].Folder);
+            ShowNowPlaying(_playlist[0]);
             for (int i = 1; i < dlg.FileNames.Length; i++)
                 await Ipc.AppendFile(dlg.FileNames[i]);
         }

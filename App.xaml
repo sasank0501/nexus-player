@@ -63,6 +63,7 @@
                                       Style="{StaticResource IconPath}"
                                       Data="{TemplateBinding Tag}"
                                       Stroke="{TemplateBinding Foreground}"
+                                      StrokeThickness="2"
                                       Width="{TemplateBinding FontSize}"
                                       Height="{TemplateBinding FontSize}"
                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
@@ -89,6 +90,10 @@
                 <Setter Property="Height" Value="46"/>
                 <Setter Property="FontSize" Value="26"/>
             </Style>
+
+            <!-- Icon stroke weight lives on the Path inside IconButton's template
+                 (2.0) rather than on IconPath, so the small icons inside menu rows
+                 can stay lighter than the control-bar ones. -->
 
             <Style x:Key="CaptionButton" TargetType="Button" BasedOn="{StaticResource IconButton}">
                 <Setter Property="Width" Value="44"/>
@@ -287,7 +292,7 @@
                 <Setter Property="Template">
                     <Setter.Value>
                         <ControlTemplate TargetType="RadioButton">
-                            <Border x:Name="bd" CornerRadius="999" Padding="11,4" Background="Transparent">
+                            <Border x:Name="bd" CornerRadius="4" Padding="11,5" Background="Transparent">
                                 <ContentPresenter/>
                             </Border>
                             <ControlTemplate.Triggers>

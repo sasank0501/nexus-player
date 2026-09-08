@@ -369,7 +369,50 @@ public partial class OverlayWindow : Window
 
     private void Settings_Click(object s, RoutedEventArgs e) => TogglePanel(SettingsPanel);
     private void More_Click(object s, RoutedEventArgs e) => TogglePanel(MoreMenu);
-    private void Episodes_Click(object s, RoutedEventArgs e) => ToggleQueuePanel();
+
+    // The queue button does two jobs: hovering peeks at the queue so you can pick
+    // an item without committing to anything, clicking opens the docked sidebar.
+    // The close is delayed because the pointer has to cross a gap between the
+    // button and the flyout, and closing on the first MouseLeave makes that
+    // journey impossible.
+    private DispatcherTimer? _queuePeekTimer;
+
+    private void QueuePeek_Enter(object s, MouseEventArgs e)
+    {
+        _queuePeekTimer?.Stop();
+        _queuePeekTimer = null;
+        if (EpisodesPanel.Visibility == Visibility.Visible) return;
+
+        RefreshQueue();
+        SettingsPanel.Visibility = Visibility.Collapsed;
+        MoreMenu.Visibility = Visibility.Collapsed;
+        EpisodesPanel.Visibility = Visibility.Visible;
+        ShowChrome();
+        RestartHideTimer();
+    }
+
+    private void QueuePeek_Leave(object s, MouseEventArgs e)
+    {
+        _queuePeekTimer?.Stop();
+        _queuePeekTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(450) };
+        _queuePeekTimer.Tick += (_, _) =>
+        {
+            _queuePeekTimer?.Stop();
+            _queuePeekTimer = null;
+            // still inside either surface? then the pointer only crossed the gap
+            if (QueueButton.IsMouseOver || EpisodesPanel.IsMouseOver) return;
+            EpisodesPanel.Visibility = Visibility.Collapsed;
+        };
+        _queuePeekTimer.Start();
+    }
+
+    private void QueueButton_Click(object s, RoutedEventArgs e)
+    {
+        _queuePeekTimer?.Stop();
+        _queuePeekTimer = null;
+        EpisodesPanel.Visibility = Visibility.Collapsed;
+        _main.ToggleSidebar();
+    }
 
     public void ToggleQueuePanel()
     {

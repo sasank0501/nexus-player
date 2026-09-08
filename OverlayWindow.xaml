@@ -88,8 +88,11 @@
                         </StackPanel>
 
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                            <Button Style="{StaticResource IconButton}" Tag="{StaticResource IconEpisodes}"
-                                    FontSize="18" Click="Episodes_Click" ToolTip="Queue  (Tab)"/>
+                            <Button x:Name="QueueButton" Style="{StaticResource IconButton}"
+                                    Tag="{StaticResource IconEpisodes}" FontSize="18"
+                                    Click="QueueButton_Click"
+                                    MouseEnter="QueuePeek_Enter" MouseLeave="QueuePeek_Leave"
+                                    ToolTip="Hover to pick from the queue, click to open the sidebar  (Tab)"/>
                             <Button Style="{StaticResource IconButton}" Tag="{StaticResource IconSubtitles}"
                                     FontSize="18" Click="SubToggle_Click" ToolTip="Subtitles  (J)"/>
                             <Button Style="{StaticResource IconButton}" Tag="{StaticResource IconAudioTrack}"
@@ -266,7 +269,8 @@
         <!-- =========================== queue panel =========================== -->
         <Border x:Name="EpisodesPanel" Visibility="Collapsed" Style="{StaticResource PanelSurface}"
                 HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,20,116"
-                Width="336" MaxHeight="460">
+                Width="336" MaxHeight="460"
+                MouseEnter="QueuePeek_Enter" MouseLeave="QueuePeek_Leave">
             <DockPanel Margin="6">
                 <Grid DockPanel.Dock="Top">
                     <TextBlock Style="{StaticResource SectionHeader}" Text="Q U E U E"/>
