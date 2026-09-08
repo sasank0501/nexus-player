@@ -90,6 +90,43 @@ public partial class MainWindow : Window
         };
 
         Log.UserVisibleError += msg => Dispatcher.BeginInvoke(() => _overlay?.ShowToast(msg));
+
+        ApplySavedBounds();
+        _sidebarVisible = _settings.SidebarVisible;
+        if (!_sidebarVisible)
+        {
+            Sidebar.Visibility = Visibility.Collapsed;
+            SidebarCol.Width = new GridLength(0);
+        }
+    }
+
+    // Reopen where the window was last closed, including on a secondary monitor.
+    // Guarded against a display that is no longer attached: restoring to a
+    // detached monitor's coordinates leaves the window invisible with no way back.
+    private void ApplySavedBounds()
+    {
+        if (_settings.WindowWidth is not double w || _settings.WindowHeight is not double h) return;
+        if (_settings.WindowLeft is not double x || _settings.WindowTop is not double y) return;
+        if (w < 320 || h < 240) return;
+
+        var vl = SystemParameters.VirtualScreenLeft;
+        var vt = SystemParameters.VirtualScreenTop;
+        var virtualScreen = new Rect(vl, vt, SystemParameters.VirtualScreenWidth, SystemParameters.VirtualScreenHeight);
+
+        // require a decent overlap, not just a touching corner
+        var wanted = new Rect(x, y, w, h);
+        var visible = Rect.Intersect(wanted, virtualScreen);
+        if (visible.IsEmpty || visible.Width < 200 || visible.Height < 150)
+        {
+            Log.Warn($"saved window bounds {wanted} are off-screen; using defaults");
+            return;
+        }
+
+        WindowStartupLocation = WindowStartupLocation.Manual;
+        Left = x;
+        Top = y;
+        Width = w;
+        Height = h;
     }
 
     private void ResizeMpvHost()
