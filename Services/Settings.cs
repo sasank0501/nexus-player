@@ -56,6 +56,15 @@ public sealed class Settings
     // only on a genuinely fresh install — never re-add roots they removed
     private Settings WithDefaults()
     {
+        // Normalise separators once, here. A root stored as "D:/Movies" satisfies
+        // Directory.Exists but makes the Windows shell throw when it is handed to
+        // a file dialog, which crashed the app.
+        for (var i = 0; i < LibraryRoots.Count; i++)
+        {
+            try { LibraryRoots[i] = Path.GetFullPath(LibraryRoots[i]).TrimEnd(Path.DirectorySeparatorChar); }
+            catch { /* leave malformed entries alone; callers check Exists */ }
+        }
+
         if (LibraryRoots.Count == 0 && !File.Exists(AppPaths.SettingsFile))
         {
             foreach (var candidate in new[]

@@ -845,15 +845,38 @@ public partial class MainWindow : Window
 
     private async void AddFilesButton_Click(object sender, RoutedEventArgs e)
     {
-        var initial = _settings.LibraryRoots.FirstOrDefault(Directory.Exists)
-                      ?? Environment.GetFolderPath(Environment.SpecialFolder.MyVideos);
+        // The shell rejects forward-slash paths even though Directory.Exists
+        // accepts them, and an InitialDirectory it dislikes throws out of
+        // ShowDialog. GetFullPath canonicalises the separators; the guard stops
+        // any other bad value from mattering.
+        string? initial = null;
+        try
+        {
+            var root = _settings.LibraryRoots.FirstOrDefault(Directory.Exists)
+                       ?? Environment.GetFolderPath(Environment.SpecialFolder.MyVideos);
+            if (!string.IsNullOrWhiteSpace(root))
+            {
+                var full = Path.GetFullPath(root);
+                if (Directory.Exists(full)) initial = full;
+            }
+        }
+        catch (Exception ex) { Log.Warn("unusable library root: " + ex.Message); }
+
         var dlg = new OpenFileDialog
         {
             Multiselect = true,
-            InitialDirectory = initial,
             Filter = "Video files (*.mkv;*.mp4;*.avi;*.mov;*.webm)|*.mkv;*.mp4;*.avi;*.mov;*.webm|All files (*.*)|*.*"
         };
-        if (dlg.ShowDialog() != true || Ipc == null) return;
+        if (initial != null) dlg.InitialDirectory = initial;
+
+        bool? picked;
+        try { picked = dlg.ShowDialog(); }
+        catch (Exception ex)
+        {
+            Log.UserError("Could not open the file picker.", ex);
+            return;
+        }
+        if (picked != true || Ipc == null) return;
 
         var wasEmpty = _playlist.Count == 0;
         foreach (var f in dlg.FileNames) _playlist.Add(new PlaylistItem(f));
