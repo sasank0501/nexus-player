@@ -4,6 +4,7 @@
 # threw" from "the click never landed" — the ambiguity that wasted time on this
 # project before. Then it confirms the process is still alive and a file dialog
 # actually appeared.
+param([string]$Exe = "bin\Debug\net10.0-windows\NexusPlayer.exe")
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
 
@@ -11,7 +12,7 @@ Set-Location "C:\Users\Sasank\nexus-player-v2"
 $log = "$env:APPDATA\NexusPlayerV2\nexus.log"
 $logBefore = if (Test-Path -LiteralPath $log) { (Get-Item -LiteralPath $log).Length } else { 0 }
 
-$p = Start-Process -FilePath "bin\Debug\net10.0-windows\NexusPlayer.exe" -PassThru
+$p = Start-Process -FilePath $Exe -PassThru
 for ($i = 0; $i -lt 60; $i++) { Start-Sleep -Milliseconds 250; $p.Refresh(); if ($p.MainWindowHandle -ne 0) { break } }
 Start-Sleep -Milliseconds 3000
 Write-Output "launched pid $($p.Id), alive=$(-not $p.HasExited)"
