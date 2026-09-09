@@ -38,25 +38,51 @@ def arc(start_deg, end_deg, r, cx=CX, cy=CY, clockwise=True):
     return f"M {p(s)} A {f(r)},{f(r)} 0 {large} {1 if clockwise else 0} {p(e)}"
 
 
-def circular_arrow(clockwise):
-    """A ~300 degree ring with a chevron arrowhead at the open end — the
-    skip-back / skip-forward icons."""
+def seek_arrow(forward):
+    """Ring with a gap at the top and an arrowhead at the open end.
+
+    The two directions are built as exact mirror images of each other (x -> 24-x)
+    so they cannot drift apart or accidentally read the same way, which is what
+    happened when they were defined independently.
+    """
     r = 8.0
-    if clockwise:
-        start, end, tip_deg = -70.0, 210.0, -70.0
-    else:
-        start, end, tip_deg = 250.0, -30.0, 250.0
-    ring = arc(start, end, r, clockwise=clockwise)
-    tip = pt(tip_deg, r)
-    # tangent at the tip; barbs trail back along it
-    tangent = tip_deg + (-90 if clockwise else 90)
-    back = math.radians(tangent + 180)
-    bx, by = math.cos(back), math.sin(back)
-    perp_x, perp_y = -by, bx
-    L, W = 4.4, 3.0
-    b1 = (tip[0] + bx * L + perp_x * W, tip[1] + by * L + perp_y * W)
-    b2 = (tip[0] + bx * L - perp_x * W, tip[1] + by * L - perp_y * W)
-    return f"{ring} M {p(b1)} L {p(tip)} L {p(b2)}"
+    # clockwise from upper-right round to upper-left: 320 degrees, gap at the top
+    start, end = 290.0, 250.0
+    ring = arc(start, end, r, clockwise=True)
+
+    tip = pt(end, r)
+    # tangent at the tip for clockwise travel
+    tangent = end + 90.0
+    bx, by = math.cos(math.radians(tangent + 180)), math.sin(math.radians(tangent + 180))
+    px, py = -by, bx
+    L, W = 4.6, 3.2
+    b1 = (tip[0] + bx * L + px * W, tip[1] + by * L + py * W)
+    b2 = (tip[0] + bx * L - px * W, tip[1] + by * L - py * W)
+    path = f"{ring} M {p(b1)} L {p(tip)} L {p(b2)}"
+
+    return path if not forward else mirror_x(path)
+
+
+def mirror_x(path):
+    """Reflect a path about x = 12. Only M/L/A commands are used here."""
+    out, i = [], 0
+    tokens = path.replace(",", " ").split()
+    while i < len(tokens):
+        t = tokens[i]
+        if t in ("M", "L"):
+            x, y = float(tokens[i + 1]), float(tokens[i + 2])
+            out.append(f"{t} {f(24 - x)},{f(y)}")
+            i += 3
+        elif t == "A":
+            rx, ry = float(tokens[i + 1]), float(tokens[i + 2])
+            rot, large, sweep = tokens[i + 3], tokens[i + 4], tokens[i + 5]
+            x, y = float(tokens[i + 6]), float(tokens[i + 7])
+            # mirroring reverses the sweep direction
+            out.append(f"A {f(rx)},{f(ry)} {rot} {large} {0 if sweep == '1' else 1} {f(24 - x)},{f(y)}")
+            i += 8
+        else:
+            raise ValueError(f"unhandled path command {t}")
+    return " ".join(out)
 
 
 def gear():
@@ -84,8 +110,8 @@ ICONS = {
     # transport
     "Play": "M 8,4.8 L 19.2,12 L 8,19.2 Z",
     "Pause": "M 9,4.8 L 9,19.2 M 15,4.8 L 15,19.2",
-    "Replay": circular_arrow(clockwise=False),
-    "Forward": circular_arrow(clockwise=True),
+    "Replay": seek_arrow(forward=False),
+    "Forward": seek_arrow(forward=True),
     "SkipNext": "M 6,5 L 15,12 L 6,19 Z M 18,4.5 L 18,19.5",
     "SkipPrev": "M 18,5 L 9,12 L 18,19 Z M 6,4.5 L 6,19.5",
 
@@ -132,7 +158,7 @@ ICONS = {
                    + arc(0, 180, 3.6, cy=13.2) + " " + arc(180, 360, 3.6, cy=13.2)),
     "Keyboard": ("M 2.5,6 L 21.5,6 L 21.5,18 L 2.5,18 Z M 6,9.5 L 6,9.5 M 9.5,9.5 L 9.5,9.5 "
                  "M 13,9.5 L 13,9.5 M 16.5,9.5 L 16.5,9.5 M 7.5,14 L 16.5,14"),
-    "Reset": circular_arrow(clockwise=False),
+    "Reset": seek_arrow(forward=False),
 
     # window caption
     "Minimize": "M 5,12 L 19,12",

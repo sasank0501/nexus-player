@@ -62,12 +62,12 @@
                     <!-- transport row -->
                     <Grid Margin="10,8,10,10">
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Center">
-                            <Button Style="{StaticResource IconButton}" Tag="{StaticResource IconReplay}"
-                                    Click="Rewind_Click" ToolTip="Back 10s  (Left)"/>
+                            <Button Style="{StaticResource SeekButton}" Tag="{StaticResource IconReplay}"
+                                    Content="10" Click="Rewind_Click" ToolTip="Back 10 seconds  (Left arrow)"/>
                             <Button x:Name="PlayPauseButton" Style="{StaticResource TransportButton}"
                                     Tag="{StaticResource IconPlay}" Click="PlayPause_Click" ToolTip="Play/Pause  (Space)"/>
-                            <Button Style="{StaticResource IconButton}" Tag="{StaticResource IconForward}"
-                                    Click="Forward_Click" ToolTip="Forward 10s  (Right)"/>
+                            <Button Style="{StaticResource SeekButton}" Tag="{StaticResource IconForward}"
+                                    Content="10" Click="Forward_Click" ToolTip="Forward 10 seconds  (Right arrow)"/>
                             <Button x:Name="NextButton" Style="{StaticResource IconButton}" Tag="{StaticResource IconSkipNext}"
                                     FontSize="17" Click="Next_Click" ToolTip="Next in queue  (&gt;)"/>
 
