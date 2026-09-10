@@ -6,3 +6,4 @@ tools/**/bin/
 tools/**/obj/
 lucide_names.txt
 lucide_svgs/
+.claude/settings.local.json
