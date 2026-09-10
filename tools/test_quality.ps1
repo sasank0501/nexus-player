@@ -4,7 +4,9 @@
 param([string]$Exe = "bin\Debug\net10.0-windows\NexusPlayer.exe")
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
-Set-Location "C:\Users\Sasank\nexus-player-v2"
+# resolve the repo from this script location, so moving the repo does not
+# break the tests the way a hardcoded path did
+Set-Location (Split-Path -Parent $PSScriptRoot)
 
 $script:rid = 300
 function Invoke-Mpv([object[]]$c) {

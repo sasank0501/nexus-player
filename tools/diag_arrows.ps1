@@ -112,7 +112,9 @@ function Try-Arrow($label, $mainHwnd) {
 }
 
 # ---------- run ----------
-Set-Location "C:\Users\Sasank\nexus-player-v2"
+# resolve the repo from this script location, so moving the repo does not
+# break the tests the way a hardcoded path did
+Set-Location (Split-Path -Parent $PSScriptRoot)
 $p = Start-Process -FilePath "bin\Debug\net10.0-windows\NexusPlayer.exe" -PassThru
 for ($i=0; $i -lt 60; $i++) { Start-Sleep -Milliseconds 250; $p.Refresh(); if ($p.MainWindowHandle -ne 0) { break } }
 Start-Sleep -Milliseconds 3500
