@@ -262,6 +262,12 @@ public partial class MainWindow : Window
         })
             psi.ArgumentList.Add(a);
 
+        // Auto-loading off, then the wanted scripts by name. quality-menu.lua
+        // otherwise overwrites ytdl-format on every load and our Quality menu
+        // has no effect. See MpvScripts.
+        foreach (var a in MpvScripts.LaunchArgs(mpvPath))
+            psi.ArgumentList.Add(a);
+
         try
         {
             _mpvProcess = new Process { StartInfo = psi, EnableRaisingEvents = true };
