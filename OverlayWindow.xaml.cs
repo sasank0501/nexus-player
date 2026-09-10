@@ -510,27 +510,72 @@ public partial class OverlayWindow : Window
         }
     }
 
-    private void OpenQuality_Click(object s, RoutedEventArgs e)
+    // Only a stream has selectable renditions; a local file's quality is simply
+    // what the file is. This row was built collapsed and nothing ever showed it,
+    // so the Quality menu has been unreachable until now.
+    public void SetStreamMode(bool isStream) =>
+        QualityRow.Visibility = isStream ? Visibility.Visible : Visibility.Collapsed;
+
+    private void OpenQuality_Click(object s, RoutedEventArgs e) =>
+        Fire.AndForget(ShowQualityPanel(), "quality menu");
+
+    private async Task ShowQualityPanel()
     {
         ShowSubPanel("Quality");
-        foreach (var entry in new[]
-                 {
-                     ("Auto (best)", "bestvideo+bestaudio/best"),
-                     ("2160p", "bestvideo[height<=2160]+bestaudio/best"),
-                     ("1440p", "bestvideo[height<=1440]+bestaudio/best"),
-                     ("1080p", "bestvideo[height<=1080]+bestaudio/best"),
-                     ("720p", "bestvideo[height<=720]+bestaudio/best"),
-                 })
+        AddSubRow("Checking what this link offers...", false, () => { });
+
+        var url = _main.CurrentPath;
+        if (url == null || !_main.CurrentIsUrl)
         {
-            var (label, format) = entry;
-            AddSubRow(label, QualityValue.Text == label, () =>
-            {
-                QualityValue.Text = label;
-                Fire.AndForget(Ipc?.SetProperty("ytdl-format", format), "set quality");
-                ShowToast("Quality applies to the next link you play.", 4000);
-                ShowSettingsRoot();
-            });
+            SubPanelItems.Children.Clear();
+            AddSubRow("Not playing a stream", false, () => { });
+            return;
         }
+
+        var exe = YtDlp.Locate(Config, _main.MpvPath);
+        if (exe == null)
+        {
+            SubPanelItems.Children.Clear();
+            AddSubRow("yt-dlp not found", false, () => { });
+            return;
+        }
+
+        // real renditions for THIS video, not a fixed ladder that may not exist
+        var qualities = await YtDlp.GetQualitiesAsync(exe, url);
+        SubPanelItems.Children.Clear();
+
+        AddSubRow("Auto (best available)", Config.StreamQuality == 0,
+            () => ApplyQuality(0, "bestvideo+bestaudio/best", "Auto"));
+
+        if (qualities.Count == 0)
+        {
+            AddSubRow("Could not read the available qualities", false, () => { });
+            return;
+        }
+
+        foreach (var entry in qualities)
+        {
+            var q = entry;
+            AddSubRow(q.Label, Config.StreamQuality == q.Height,
+                () => ApplyQuality(q.Height, q.YtdlFormat, q.Label));
+        }
+    }
+
+    private void ApplyQuality(int height, string format, string label)
+    {
+        Config.StreamQuality = height;
+        QualityValue.Text = label;
+        ShowSettingsRoot();
+        Fire.AndForget(ApplyQualityAsync(format, label), "apply stream quality");
+    }
+
+    private async Task ApplyQualityAsync(string format, string label)
+    {
+        if (Ipc == null) return;
+        await Ipc.SetProperty("ytdl-format", format);
+        // the switch only takes effect on reload, so do it and land back in place
+        await _main.ReloadCurrentPreservingPosition();
+        ShowToast("Switched to " + label, 3000);
     }
 
     private void OpenAudio_Click(object s, RoutedEventArgs e) =>

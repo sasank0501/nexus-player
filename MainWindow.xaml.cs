@@ -54,6 +54,7 @@ public partial class MainWindow : Window
     private double? _pendingResume;
     private string? _pendingResumePath;
     private string? _screenshotPath;   // file the screenshot folder is currently set for
+    private string? _mpvPath;          // the mpv we launched; yt-dlp lives beside it
 
     internal MpvIpcClient? Ipc { get; private set; }
     internal Settings Config => _settings;
@@ -271,6 +272,7 @@ public partial class MainWindow : Window
             _mpvProcess.Start();
             _mpvProcess.BeginOutputReadLine();
             _mpvProcess.BeginErrorReadLine();
+            _mpvPath = mpvPath;
             Log.Info($"mpv started (pid {_mpvProcess.Id}) from {mpvPath}");
         }
         catch (Exception ex)
@@ -377,9 +379,15 @@ public partial class MainWindow : Window
             Log.Info($"now playing: {path}");
         }
 
-        // Checked independently of whether the item changed. On a fresh start the
-        // restored file is already _currentItem, so gating this on a change left
-        // the screenshot folder pointing wherever mpv.conf last had it.
+        // Everything below is reconciled against what is actually playing, not
+        // against whether the item changed. On a fresh start the restored file is
+        // already _currentItem, so a change-gated check never runs on that launch
+        // — which is how the screenshot folder, and then the Quality row, both
+        // ended up silently doing nothing.
+        _overlay?.SetStreamMode(
+            path.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+            path.StartsWith("https://", StringComparison.OrdinalIgnoreCase));
+
         if (!string.Equals(_screenshotPath, path, StringComparison.OrdinalIgnoreCase))
         {
             _screenshotPath = path;
@@ -699,6 +707,37 @@ public partial class MainWindow : Window
     {
         var index = _currentItem == null ? -1 : _playlist.IndexOf(_currentItem);
         _overlay?.SetQueuePosition(index, _playlist.Count);
+    }
+
+    // --- streamed video quality ----------------------------------------------
+
+    public bool CurrentIsUrl => _currentItem?.IsUrl == true;
+    public string? CurrentPath => _currentItem?.Path;
+    public string? MpvPath => _mpvPath;
+
+    /// <summary>
+    /// Reload what is playing and land back where the viewer was. Changing the
+    /// stream quality means re-resolving the link, because mpv cannot swap a
+    /// ytdl-selected rendition in place; reusing the resume machinery means the
+    /// seek waits for the new duration rather than racing the load.
+    /// </summary>
+    public async Task ReloadCurrentPreservingPosition()
+    {
+        if (Ipc == null || _currentItem == null) return;
+
+        var resumeAt = _lastTimePos;
+        var wasPaused = false;
+        var paused = await Ipc.RequestAsync("get_property", "pause");
+        if (paused.ValueKind == System.Text.Json.JsonValueKind.True) wasPaused = true;
+
+        if (resumeAt > 2)
+        {
+            _pendingResume = resumeAt;
+            _pendingResumePath = _currentItem.Path;
+        }
+        await Ipc.LoadFile(_currentItem.Path);
+        if (wasPaused) await Ipc.SetPause(true);
+        Log.Info($"reloading at {resumeAt:F1}s for a quality change");
     }
 
     // --- picture-in-picture --------------------------------------------------

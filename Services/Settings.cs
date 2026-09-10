@@ -16,6 +16,7 @@ public sealed class Settings
     public bool Muted { get; set; }
     public double Speed { get; set; } = 1.0;
     public string VideoFit { get; set; } = "Contain";   // Contain | Cover | Fill
+    public int StreamQuality { get; set; }              // max height for links; 0 = best available
 
     // --- picture ---
     public string Anime4kPreset { get; set; } = "Off";  // Off | A | B | C | AA | BB | CA
