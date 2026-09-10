@@ -4,3 +4,5 @@ obj/
 secrets.json
 tools/**/bin/
 tools/**/obj/
+lucide_names.txt
+lucide_svgs/
