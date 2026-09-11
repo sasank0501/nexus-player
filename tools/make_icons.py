@@ -218,12 +218,12 @@ ALTERNATIVES = {
 
 # The option in force for each contested slot.
 CHOSEN = {
-    "Replay": "hand-drawn",
-    "Forward": "hand-drawn",
-    "Pip": "hand-drawn",
+    "Replay": "chevrons",
+    "Forward": "chevrons",
+    "Pip": "picture-in-picture-2",
     "VideoFit": "hand-drawn",
-    "Quality": "hand-drawn",
-    "Upscale": "hand-drawn",
+    "Quality": "signal",
+    "Upscale": "sparkles",
     "Restore": "hand-drawn",
 }
 
@@ -291,7 +291,9 @@ def build():
             raise SystemExit(f"{name}: no such option {choice!r}; "
                              f"pick one of {sorted(options)}")
         note = "hand-drawn" if choice == "hand-drawn" else f"lucide {choice}"
-        icons[name] = (resolve(options[choice]), f"{note}, pending review")
+        rejected = sorted(o for o in options if o != choice)
+        icons[name] = (resolve(options[choice]),
+                        f"{note} (chosen over {', '.join(rejected)})")
     return icons
 
 
@@ -321,9 +323,9 @@ def main():
     with open(out, "w", encoding="utf-8", newline="\r\n") as fh:
         fh.write(text)
 
-    pending = sum(1 for n in icons if icons[n][1].endswith("pending review"))
+    hand_drawn = sum(1 for n in icons if icons[n][1].startswith("hand-drawn"))
     print(f"Icons.xaml written with {len(icons)} icons "
-          f"({len(icons) - pending} from Lucide, {pending} awaiting a decision)")
+          f"({len(icons) - hand_drawn} from Lucide, {hand_drawn} hand-drawn)")
 
 
 if __name__ == "__main__":
