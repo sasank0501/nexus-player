@@ -131,6 +131,7 @@ LUCIDE = {
     "Preferences": ("sliders-horizontal", '<path d="M10 5H3"/> <path d="M12 19H3"/> <path d="M14 3v4"/> <path d="M16 17v4"/> <path d="M21 12h-9"/> <path d="M21 19h-5"/> <path d="M21 5h-7"/> <path d="M8 10v4"/> <path d="M8 12H3"/>'),
     "Speed": ("gauge", '<path d="m12 14 4-4"/> <path d="M3.34 19a10 10 0 1 1 17.32 0"/>'),
     "Filters": ("sliders-vertical", '<path d="M10 8h4"/> <path d="M12 21v-9"/> <path d="M12 8V3"/> <path d="M17 16h4"/> <path d="M19 12V3"/> <path d="M19 21v-5"/> <path d="M3 14h4"/> <path d="M5 10V3"/> <path d="M5 21v-7"/>'),
+    "People": ("users", '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/> <circle cx="9" cy="7" r="4"/> <path d="M22 21v-2a4 4 0 0 0-3-3.87"/> <path d="M16 3.13a4 4 0 0 1 0 7.75"/>'),
 
     # more-options menu
     "Stats": ("activity", '<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/>'),

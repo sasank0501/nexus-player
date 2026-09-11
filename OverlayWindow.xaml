@@ -253,6 +253,21 @@
                             </StackPanel>
                         </Grid>
                     </Button>
+
+                    <!-- Hidden for streams: there is no title to look up against
+                         TMDb for a bare URL. See SetStreamMode. -->
+                    <Button x:Name="CastCrewRow" Style="{StaticResource MenuRow}" Click="OpenCastCrew_Click">
+                        <Grid>
+                            <StackPanel Orientation="Horizontal">
+                                <Path Style="{StaticResource MenuRowIcon}" Data="{StaticResource IconPeople}"/>
+                                <TextBlock Style="{StaticResource MenuRowLabel}" Text="Cast &amp; Crew"/>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                <Path Style="{StaticResource MenuRowIcon}" Data="{StaticResource IconChevronRight}"
+                                      Width="13" Height="13"/>
+                            </StackPanel>
+                        </Grid>
+                    </Button>
                 </StackPanel>
 
                 <!-- drill-in sub-panel: header + generated rows -->

@@ -11,9 +11,11 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 // alias: System.IO.Path is used here too, and bare `Path` is ambiguous
 using ShapePath = System.Windows.Shapes.Path;
 using System.Windows.Threading;
+using System.Text.RegularExpressions;
 
 namespace MpvFrontend;
 
@@ -526,6 +528,55 @@ public partial class OverlayWindow : Window
         AddSubRow("Open log folder", false, () => OpenInExplorer(AppPaths.LogFile));
         AddSubRow($"mpv: {Path.GetFileName(Config.MpvPath ?? "auto-located")}", false,
             () => ShowToast(Config.MpvPath ?? "Located automatically", 6000));
+        AddTmdbKeyRow();
+    }
+
+    // A TMDb key doesn't fit AddSubRow's "pick one of these" shape, so it gets
+    // its own inline text field. Free at themoviedb.org/settings/api; this is
+    // what the Cast & Crew panel needs to fetch anything.
+    private void AddTmdbKeyRow()
+    {
+        SubPanelItems.Children.Add(new TextBlock
+        {
+            Text = "TMDB API KEY",
+            Style = (Style)FindResource("SectionHeader"),
+            Margin = new Thickness(12, 10, 12, 4),
+        });
+
+        var box = new Border
+        {
+            Background = (Brush)FindResource("Bg2"),
+            CornerRadius = new CornerRadius(8),
+            Margin = new Thickness(10, 0, 10, 4),
+            Padding = new Thickness(10, 4, 10, 4),
+        };
+        var input = new TextBox
+        {
+            Text = Config.TmdbApiKey ?? "",
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Foreground = (Brush)FindResource("Text"),
+            CaretBrush = Brushes.White,
+            FontSize = 12,
+        };
+        input.KeyDown += (_, ev) =>
+        {
+            if (ev.Key != Key.Enter) return;
+            Config.TmdbApiKey = string.IsNullOrWhiteSpace(input.Text) ? null : input.Text.Trim();
+            Config.Save();
+            ShowToast(Config.TmdbApiKey != null ? "TMDb key saved" : "TMDb key cleared");
+        };
+        box.Child = input;
+        SubPanelItems.Children.Add(box);
+
+        SubPanelItems.Children.Add(new TextBlock
+        {
+            Text = "Free at themoviedb.org/settings/api - unlocks the Cast & Crew panel. Enter to save.",
+            Style = (Style)FindResource("MenuRowValue"),
+            Margin = new Thickness(12, 4, 12, 10),
+            TextWrapping = TextWrapping.Wrap,
+            HorizontalAlignment = HorizontalAlignment.Left,
+        });
     }
 
     private void OpenSpeed_Click(object s, RoutedEventArgs e)
@@ -547,8 +598,139 @@ public partial class OverlayWindow : Window
     // Only a stream has selectable renditions; a local file's quality is simply
     // what the file is. This row was built collapsed and nothing ever showed it,
     // so the Quality menu has been unreachable until now.
-    public void SetStreamMode(bool isStream) =>
+    public void SetStreamMode(bool isStream)
+    {
         QualityRow.Visibility = isStream ? Visibility.Visible : Visibility.Collapsed;
+        CastCrewRow.Visibility = isStream ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    // ============================== cast & crew ==============================
+    // Phase 3 (see Services/TitleCleaner.cs's own doc comment): real metadata via
+    // TMDb, currently just the cast list - not scene-synced, since "who's on
+    // screen right now" needs per-scene timing data nobody outside Amazon has.
+
+    private void OpenCastCrew_Click(object s, RoutedEventArgs e) =>
+        Fire.AndForget(ShowCastPanel(), "cast & crew");
+
+    private async Task ShowCastPanel()
+    {
+        ShowSubPanel("Cast");
+        SubPanelItems.Children.Add(StatusRow("Looking up the cast..."));
+
+        var path = _main.CurrentPath;
+        if (path == null || _main.CurrentIsUrl)
+        {
+            SubPanelItems.Children.Clear();
+            SubPanelItems.Children.Add(StatusRow("Not available for streams."));
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(Config.TmdbApiKey))
+        {
+            SubPanelItems.Children.Clear();
+            SubPanelItems.Children.Add(StatusRow("Add a TMDb API key in Playback Preferences to use this."));
+            return;
+        }
+
+        // ShowTitle keeps a trailing "(YYYY)" when it found one (see Clean() in
+        // TitleCleaner) - split it back out rather than re-deriving it, and guess
+        // movie vs. TV from whether EpisodeLabel came back looking like "S01E02".
+        var rawTitle = TitleCleaner.ShowTitle(path);
+        var yearMatch = Regex.Match(rawTitle, @"\((\d{4})\)$");
+        var title = yearMatch.Success ? rawTitle[..yearMatch.Index].Trim() : rawTitle;
+        int? year = yearMatch.Success ? int.Parse(yearMatch.Groups[1].Value) : null;
+        var isTv = Regex.IsMatch(TitleCleaner.EpisodeLabel(path), @"^S\d{2}E\d{2}$");
+
+        var credits = await TmdbClient.GetCredits(title, year, isTv, Config.TmdbApiKey);
+
+        // the panel may have been backed out of, or replaced by another one, by
+        // the time the network round trip finishes - only render if it's still
+        // the one showing, so a quick back-and-forth doesn't paint into the wrong
+        // panel a moment later
+        if (SubPanelTitle.Text != "Cast") return;
+        SubPanelItems.Children.Clear();
+
+        if (credits == null || credits.Cast.Count == 0)
+        {
+            // TmdbClient.GetCredits collapses "no match" and "bad key/network
+            // failure" to the same null - both are logged with the real reason,
+            // but the panel can't tell them apart, so it hints at both causes
+            // rather than confidently blaming the title.
+            SubPanelItems.Children.Add(StatusRow(
+                $"No match found for \"{title}\" - or check the TMDb key in Playback Preferences."));
+            return;
+        }
+
+        foreach (var credit in credits.Cast) AddCastRow(credit);
+    }
+
+    private FrameworkElement StatusRow(string message) => new TextBlock
+    {
+        Text = message,
+        Style = (Style)FindResource("MenuRowValue"),
+        Margin = new Thickness(12, 10, 12, 10),
+        TextWrapping = TextWrapping.Wrap,
+        HorizontalAlignment = HorizontalAlignment.Left,
+    };
+
+    private void AddCastRow(TmdbCredit credit)
+    {
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(12, 6, 12, 6) };
+
+        var photo = new Border
+        {
+            Width = 40,
+            Height = 40,
+            CornerRadius = new CornerRadius(20),
+            Background = (Brush)FindResource("Bg2"),
+        };
+        row.Children.Add(photo);
+
+        var text = new StackPanel { Margin = new Thickness(10, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+        text.Children.Add(new TextBlock
+        {
+            Text = credit.Name,
+            FontSize = 12.5,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = (Brush)FindResource("Text"),
+        });
+        if (!string.IsNullOrEmpty(credit.Role))
+        {
+            text.Children.Add(new TextBlock
+            {
+                Text = credit.Role,
+                FontSize = 10.5,
+                Foreground = (Brush)FindResource("TextMuted"),
+                Margin = new Thickness(0, 1, 0, 0),
+            });
+        }
+        row.Children.Add(text);
+
+        SubPanelItems.Children.Add(row);
+        Fire.AndForget(LoadCastPhoto(photo, credit.ProfilePath), "cast photo");
+    }
+
+    // Border with no photo yet (loading, no photo on file, or the download
+    // failed) just stays its plain Bg2 fill - a blank circle, not broken art.
+    private static async Task LoadCastPhoto(Border target, string? profilePath)
+    {
+        var localPath = await TmdbClient.GetCachedProfileImage(profilePath);
+        if (localPath == null) return;
+
+        try
+        {
+            var bmp = new BitmapImage();
+            bmp.BeginInit();
+            bmp.CacheOption = BitmapCacheOption.OnLoad;
+            bmp.UriSource = new Uri(localPath);
+            bmp.EndInit();
+            bmp.Freeze();
+            target.Child = new Image { Source = bmp, Stretch = Stretch.UniformToFill, Width = 40, Height = 40 };
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"cast photo render failed for {profilePath}: {ex.Message}");
+        }
+    }
 
     private void OpenQuality_Click(object s, RoutedEventArgs e) =>
         Fire.AndForget(ShowQualityPanel(), "quality menu");

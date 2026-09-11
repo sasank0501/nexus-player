@@ -82,6 +82,8 @@
     <Geometry x:Key="IconMore">M 11,12 A 1,1 0 1 1 13,12 A 1,1 0 1 1 11,12 Z M 18,12 A 1,1 0 1 1 20,12 A 1,1 0 1 1 18,12 Z M 4,12 A 1,1 0 1 1 6,12 A 1,1 0 1 1 4,12 Z</Geometry>
     <!-- lucide pause -->
     <Geometry x:Key="IconPause">M 15,3 L 18,3 A 1,1 0 0 1 19,4 L 19,20 A 1,1 0 0 1 18,21 L 15,21 A 1,1 0 0 1 14,20 L 14,4 A 1,1 0 0 1 15,3 Z M 6,3 L 9,3 A 1,1 0 0 1 10,4 L 10,20 A 1,1 0 0 1 9,21 L 6,21 A 1,1 0 0 1 5,20 L 5,4 A 1,1 0 0 1 6,3 Z</Geometry>
+    <!-- lucide users -->
+    <Geometry x:Key="IconPeople">M 16,21 L 16,19 A 4,4 0 0 0 12,15 L 6,15 A 4,4 0 0 0 2,19 L 2,21 M 5,7 A 4,4 0 1 1 13,7 A 4,4 0 1 1 5,7 Z M 22,21 L 22,19 A 4,4 0 0 0 19,15.13 M 16,3.13 A 4,4 0 0 1 16,10.88</Geometry>
     <!-- lucide picture-in-picture-2 (chosen over hand-drawn, picture-in-picture) -->
     <Geometry x:Key="IconPip">M 21,9 L 21,6 A 2,2 0 0 0 19,4 L 4,4 A 2,2 0 0 0 2,6 L 2,16 C 2,17.1 2.9,18 4,18 L 8,18 M 14,13 L 20,13 A 2,2 0 0 1 22,15 L 22,18 A 2,2 0 0 1 20,20 L 14,20 A 2,2 0 0 1 12,18 L 12,15 A 2,2 0 0 1 14,13 Z</Geometry>
     <!-- lucide play -->
