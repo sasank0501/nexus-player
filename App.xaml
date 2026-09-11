@@ -95,40 +95,13 @@
                  (2.0) rather than on IconPath, so the small icons inside menu rows
                  can stay lighter than the control-bar ones. -->
 
-            <!-- Seek buttons put the seconds inside the ring, as every mainstream
-                 player does. Two mirrored circular arrows alone do not read as
-                 "back" and "forward" at 19px; the numeral is what makes the
-                 intent obvious. Content is the number, Tag is the arc. -->
+            <!-- Seek buttons: same template as IconButton, just drawn a size up
+                 since they sit either side of the (bigger) transport button.
+                 Used to overlay a "10" numeral on the arc; the double-chevron
+                 icon reads as skip-back/skip-forward on its own, so that was
+                 dropped along with the custom template it required. -->
             <Style x:Key="SeekButton" TargetType="Button" BasedOn="{StaticResource IconButton}">
                 <Setter Property="FontSize" Value="22"/>
-                <Setter Property="Template">
-                    <Setter.Value>
-                        <ControlTemplate TargetType="Button">
-                            <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="9">
-                                <Grid>
-                                    <Path x:Name="ico" Style="{StaticResource IconPath}"
-                                          Data="{TemplateBinding Tag}"
-                                          Stroke="{TemplateBinding Foreground}" StrokeThickness="2"
-                                          Width="{TemplateBinding FontSize}" Height="{TemplateBinding FontSize}"
-                                          HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                    <TextBlock Text="{TemplateBinding Content}"
-                                               Foreground="{TemplateBinding Foreground}"
-                                               FontSize="8.5" FontWeight="SemiBold"
-                                               HorizontalAlignment="Center" VerticalAlignment="Center"
-                                               Margin="0,2,0,0"/>
-                                </Grid>
-                            </Border>
-                            <ControlTemplate.Triggers>
-                                <Trigger Property="IsMouseOver" Value="True">
-                                    <Setter TargetName="bd" Property="Background" Value="{StaticResource HoverOverlay}"/>
-                                </Trigger>
-                                <Trigger Property="IsPressed" Value="True">
-                                    <Setter TargetName="bd" Property="Background" Value="{StaticResource PressOverlay}"/>
-                                </Trigger>
-                            </ControlTemplate.Triggers>
-                        </ControlTemplate>
-                    </Setter.Value>
-                </Setter>
             </Style>
 
             <Style x:Key="CaptionButton" TargetType="Button" BasedOn="{StaticResource IconButton}">
