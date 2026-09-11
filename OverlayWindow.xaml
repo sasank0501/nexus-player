@@ -44,8 +44,12 @@
                                            Foreground="{StaticResource Text}"/>
                             </Border>
                         </StackPanel>
+                        <!-- Click toggles this between the total length and a
+                             "-mm:ss" countdown of what's left, VLC-style. -->
                         <TextBlock x:Name="DurationLabel" Text="00:00" FontSize="11.5"
-                                   Foreground="{StaticResource Text}" HorizontalAlignment="Right"/>
+                                   Foreground="{StaticResource Text}" HorizontalAlignment="Right"
+                                   Cursor="Hand" MouseLeftButtonDown="DurationLabel_Click"
+                                   ToolTip="Click to show time remaining"/>
                     </Grid>
 
                     <!-- full-bleed seek bar: no side margin, edge to edge -->

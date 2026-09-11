@@ -24,6 +24,8 @@ public partial class OverlayWindow : Window
 
     private bool _isSeeking;
     private double _duration;
+    private double _lastPos;
+    private bool _showRemaining;      // duration label toggled to a "-mm:ss" countdown, VLC-style
     private bool _muted;
     private bool _ready;              // suppresses Checked events raised during InitializeComponent
     private bool _isFullscreen;
@@ -94,14 +96,34 @@ public partial class OverlayWindow : Window
     public void UpdateTime(double pos)
     {
         if (_isSeeking) return;
+        _lastPos = pos;
         TimeLabel.Text = Fmt(pos);
         if (_duration > 0) SeekSlider.Value = pos / _duration * 100.0;
+        if (_showRemaining) RefreshDurationLabel();
     }
 
     public void UpdateDuration(double dur)
     {
         _duration = dur;
-        DurationLabel.Text = Fmt(dur);
+        RefreshDurationLabel();
+    }
+
+    // Click toggles the duration label, VLC-style, between the total length
+    // and a "-mm:ss" countdown of what's left - the elapsed label (left) stays
+    // a plain count-up either way, so there's always at least one clock
+    // reading the "normal" direction.
+    private void DurationLabel_Click(object sender, MouseButtonEventArgs e)
+    {
+        _showRemaining = !_showRemaining;
+        RefreshDurationLabel();
+        e.Handled = true;
+    }
+
+    private void RefreshDurationLabel()
+    {
+        DurationLabel.Text = _showRemaining
+            ? "-" + Fmt(Math.Max(0, _duration - _lastPos))
+            : Fmt(_duration);
     }
 
     public void UpdatePause(bool paused)
