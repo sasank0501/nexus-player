@@ -4,6 +4,21 @@
         Title="overlay" WindowStyle="None" AllowsTransparency="True" Background="Transparent"
         ShowInTaskbar="False" ShowActivated="False" ResizeMode="NoResize"
         FontFamily="{StaticResource UiFont}">
+    <!-- This window's bottom edge is always the app window's own bottom edge
+         (VideoContainer carries no bottom margin), which is where MainWindow's
+         own rounded-corner clip lands - but this is a *separate* top-level
+         window, untouched by that clip, so its square corners used to sit
+         right on top of MainWindow's rounded ones. Rounding to match is a
+         plain WPF Clip here rather than MainWindow's native SetWindowRgn hack,
+         since this window already renders through real per-pixel alpha
+         (AllowsTransparency) - no fighting a native child surface the way
+         MainWindow has to for mpv's video.
+         Bottom-left is always the window's true corner regardless of the
+         sidebar; bottom-right only is when the sidebar is hidden and this
+         window's own right edge reaches the app window's right edge - so it
+         starts at 0 and RootClip.UpdateCorners (OverlayWindow.xaml.cs) turns
+         it on and off as the sidebar toggles. -->
+    <Border x:Name="RootClip" CornerRadius="0,0,0,8">
     <Grid MouseMove="Root_MouseMove" MouseWheel="Root_MouseWheel">
 
         <!-- Click layer: pause / double-click fullscreen.
@@ -500,4 +515,5 @@
             <TextBlock x:Name="ToastText" FontSize="12.5" Foreground="{StaticResource Text}" TextWrapping="Wrap"/>
         </Border>
     </Grid>
+    </Border>
 </Window>

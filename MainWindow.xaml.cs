@@ -288,6 +288,7 @@ public partial class MainWindow : Window
         if (!await StartMpv(mpvPath)) return;
 
         _overlay = new OverlayWindow(this) { Owner = this };
+        _overlay.SetSidebarHidden(!_sidebarVisible);
         _overlay.Show();
         PositionOverlay();
 
@@ -642,6 +643,7 @@ public partial class MainWindow : Window
         _sidebarVisible = !_sidebarVisible;
         Sidebar.Visibility = _sidebarVisible ? Visibility.Visible : Visibility.Collapsed;
         SidebarCol.Width = new GridLength(_sidebarVisible ? 300 : 0);
+        _overlay?.SetSidebarHidden(!_sidebarVisible);
         AfterLayoutRefresh();
     }
 
@@ -690,6 +692,7 @@ public partial class MainWindow : Window
             WindowState = _preFullscreenState;
         }
         _overlay?.SetFullscreenState(_isFullscreen);
+        if (!_isFullscreen) _overlay?.SetSidebarHidden(!_sidebarVisible);
         AfterLayoutRefresh();
     }
 

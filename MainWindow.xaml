@@ -4,7 +4,17 @@
         Title="Nexus Player" Height="760" Width="1280"
         Background="{StaticResource Bg0}"
         FontFamily="{StaticResource UiFont}"
-        WindowStyle="SingleBorderWindow">
+        WindowStyle="SingleBorderWindow"
+        UseLayoutRounding="True">
+    <!-- UseLayoutRounding snaps WPF's own layout to whole device pixels. Without
+         it, VideoContainer's ActualWidth can land on a fractional pixel (e.g.
+         1455.6), and while the title bar's WPF-rendered edge still lines up
+         with the window's true right edge either way, ResizeMpvHost hands that
+         fractional value to a *native* child window (mpv, via HwndHost), which
+         rounds it on its own - independently of however WPF rounded the title
+         bar above it. The two roundings don't always agree, and the result is
+         a 1px seam between the title bar and the video exactly where the
+         reader spotted it, by the caption buttons. -->
     <!-- "Sheet of glass": WindowStyle stays a real, WS_CAPTION-bearing window
          style (rather than None's bare popup) and GlassFrameThickness="-1"
          tells WindowChrome to extend that glass across the entire window, so

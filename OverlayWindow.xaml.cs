@@ -126,6 +126,12 @@ public partial class OverlayWindow : Window
             : Fmt(_duration);
     }
 
+    // See RootClip in OverlayWindow.xaml: bottom-left is always this window's
+    // true corner, bottom-right only is when the sidebar is hidden and this
+    // window's right edge reaches the app window's right edge.
+    public void SetSidebarHidden(bool hidden) =>
+        RootClip.CornerRadius = new CornerRadius(0, 0, hidden ? 8 : 0, 8);
+
     public void UpdatePause(bool paused)
     {
         PlayPauseButton.Tag = FindResource(paused ? "IconPlay" : "IconPause");
@@ -195,6 +201,13 @@ public partial class OverlayWindow : Window
     {
         _isFullscreen = isFullscreen;
         FullscreenButton.Tag = FindResource(isFullscreen ? "IconFullscreenExit" : "IconFullscreen");
+
+        // A fullscreen video filling the monitor edge to edge shouldn't have
+        // corners cut out of it, matching MainWindow's own region (see
+        // UpdateWindowRegion) going square for the same state. Restoring the
+        // sidebar-aware rounding on exit is MainWindow's job - it calls
+        // SetSidebarHidden right alongside this.
+        if (isFullscreen) RootClip.CornerRadius = new CornerRadius(0);
     }
 
     // Failures used to be entirely invisible — a dead loadfile just left a black
