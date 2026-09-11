@@ -167,7 +167,6 @@ public partial class OverlayWindow : Window
         UpdateVolume(s.Volume);
         UpdateMute(s.Muted);
         UpdateSpeed(s.Speed);
-        UpscalerValue.Text = PresetLabel(s.Anime4kPreset);
     }
 
     public void SetFullscreenState(bool isFullscreen)
@@ -936,7 +935,6 @@ public partial class OverlayWindow : Window
 
         var key = UpscalerEnabled.IsChecked == true ? CurrentPresetKey() : "Off";
         Config.Anime4kPreset = key;
-        UpscalerValue.Text = PresetLabel(key);
 
         if (key == "Off" || !Presets.TryGetValue(key, out var chain))
         {

@@ -63,11 +63,11 @@
                     <Grid Margin="10,8,10,10">
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Center">
                             <Button Style="{StaticResource SeekButton}" Tag="{StaticResource IconReplay}"
-                                    Content="10" Click="Rewind_Click" ToolTip="Back 10 seconds  (Left arrow)"/>
+                                    Click="Rewind_Click" ToolTip="Back 10 seconds  (Left arrow)"/>
                             <Button x:Name="PlayPauseButton" Style="{StaticResource TransportButton}"
                                     Tag="{StaticResource IconPlay}" Click="PlayPause_Click" ToolTip="Play/Pause  (Space)"/>
                             <Button Style="{StaticResource SeekButton}" Tag="{StaticResource IconForward}"
-                                    Content="10" Click="Forward_Click" ToolTip="Forward 10 seconds  (Right arrow)"/>
+                                    Click="Forward_Click" ToolTip="Forward 10 seconds  (Right arrow)"/>
                             <Button x:Name="NextButton" Style="{StaticResource IconButton}" Tag="{StaticResource IconSkipNext}"
                                     FontSize="17" Click="Next_Click" ToolTip="Next in queue  (&gt;)"/>
 
@@ -97,6 +97,8 @@
                                     FontSize="18" Click="SubToggle_Click" ToolTip="Subtitles  (J)"/>
                             <Button Style="{StaticResource IconButton}" Tag="{StaticResource IconAudioTrack}"
                                     FontSize="18" Click="AudioCycle_Click" ToolTip="Audio track  (#)"/>
+                            <Button Style="{StaticResource IconButton}" Tag="{StaticResource IconUpscale}"
+                                    FontSize="18" Click="OpenUpscaler_Click" ToolTip="Anime4K Upscaler"/>
                             <Button Style="{StaticResource IconButton}" Tag="{StaticResource IconSettings}"
                                     FontSize="18" Click="Settings_Click" ToolTip="Settings"/>
                             <Button Style="{StaticResource IconButton}" Tag="{StaticResource IconMore}"
@@ -232,20 +234,6 @@
                             </StackPanel>
                         </Grid>
                     </Button>
-
-                    <Button Style="{StaticResource MenuRow}" Click="OpenUpscaler_Click">
-                        <Grid>
-                            <StackPanel Orientation="Horizontal">
-                                <Path Style="{StaticResource MenuRowIcon}" Data="{StaticResource IconUpscale}"/>
-                                <TextBlock Style="{StaticResource MenuRowLabel}" Text="Anime4K Upscaler"/>
-                            </StackPanel>
-                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                                <TextBlock x:Name="UpscalerValue" Style="{StaticResource MenuRowValue}" Text="Off"/>
-                                <Path Style="{StaticResource MenuRowIcon}" Data="{StaticResource IconChevronRight}"
-                                      Width="13" Height="13"/>
-                            </StackPanel>
-                        </Grid>
-                    </Button>
                 </StackPanel>
 
                 <!-- drill-in sub-panel: header + generated rows -->
@@ -349,9 +337,11 @@
         </Border>
 
         <!-- ====================== video processing modal ====================== -->
-        <Grid x:Name="VideoProcessing" Visibility="Collapsed" Background="#66000000">
+        <!-- Anchored bottom-right, same corner and margin as the settings and
+             queue panels, rather than centered over the video like a modal. -->
+        <Grid x:Name="VideoProcessing" Visibility="Collapsed">
             <Border Style="{StaticResource PanelSurface}" Width="374" MaxHeight="560"
-                    HorizontalAlignment="Center" VerticalAlignment="Center">
+                    HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,20,116">
                 <DockPanel Margin="14,12,14,12">
                     <Grid DockPanel.Dock="Top" Margin="0,0,0,10">
                         <TextBlock Text="Video Processing" FontSize="14" FontWeight="SemiBold"
