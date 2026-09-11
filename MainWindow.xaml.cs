@@ -10,6 +10,8 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
+using System.Windows.Media;
+using System.Windows.Threading;
 using Microsoft.Win32;
 
 namespace MpvFrontend;
@@ -37,6 +39,8 @@ public partial class MainWindow : Window
 
     private Process? _mpvProcess;
     private OverlayWindow? _overlay;
+    private DispatcherTimer? _maximizeSettleTimer;
+    private IntPtr _hwnd;
     private bool _isFullscreen;
     private bool _sidebarVisible = true;
     private PlaylistItem? _currentItem;
@@ -71,7 +75,7 @@ public partial class MainWindow : Window
 
         Loaded += MainWindow_Loaded;
         Closing += MainWindow_Closing;
-        SizeChanged += (_, _) => { ResizeMpvHost(); PositionOverlay(); };
+        SizeChanged += (_, _) => { ResizeMpvHost(); PositionOverlay(); UpdateWindowRegion(); };
         LocationChanged += (_, _) => PositionOverlay();
         StateChanged += MainWindow_StateChanged;
 
@@ -143,8 +147,83 @@ public partial class MainWindow : Window
     protected override void OnSourceInitialized(EventArgs e)
     {
         base.OnSourceInitialized(e);
+        _hwnd = ((HwndSource)PresentationSource.FromVisual(this)!).Handle;
         ((HwndSource)PresentationSource.FromVisual(this)!).AddHook(WndProc);
+
+        // Windows 11's DWMWA_WINDOW_CORNER_PREFERENCE is the "correct" way to
+        // ask for rounded corners - it rounds the whole composited window
+        // surface, mpv's video included, since that's a native child HWND a
+        // WPF clip could never reach. But it is a no-op on this build (the
+        // registered ProductName is "Windows 10 IoT Enterprise LTSC 2024"
+        // despite a Windows-11-numbered build: LTSC channels stay on the
+        // Windows 10 shell, which never implemented it - confirmed by this
+        // call returning S_OK while producing no visible change). It costs
+        // nothing to still ask, for whichever machine this next runs on with
+        // a shell that honours it; UpdateWindowRegion below is what actually
+        // draws the rounding here, and everywhere DWM's attribute doesn't.
+        ApplyRoundedCorners(_hwnd);
+        UpdateWindowRegion();
     }
+
+    private const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
+    private const int DWMWCP_ROUND = 2;
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int valueSize);
+
+    private static void ApplyRoundedCorners(IntPtr hwnd)
+    {
+        try
+        {
+            int pref = DWMWCP_ROUND;
+            DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, ref pref, sizeof(int));
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"could not set DWMWA_WINDOW_CORNER_PREFERENCE: {ex.Message}");
+        }
+    }
+
+    // The actual corner rounding on this machine: a hard window-shape clip via
+    // SetWindowRgn, which has worked since Windows 2000 and does not depend on
+    // any DWM shell feature. Reapplied on every resize because the region is
+    // sized in the window's own client-area pixels, not something that scales
+    // itself - and dropped back to a plain rectangle while maximized or
+    // fullscreen, matching how a maximized window is supposed to sit flush
+    // against the screen edges rather than clipping into content that's
+    // already filling them.
+    private void UpdateWindowRegion()
+    {
+        if (_hwnd == IntPtr.Zero) return;
+
+        if (WindowState is WindowState.Maximized or WindowState.Minimized || _isFullscreen)
+        {
+            SetWindowRgn(_hwnd, IntPtr.Zero, true);
+            return;
+        }
+
+        if (!GetClientRect(_hwnd, out var rect)) return;
+        var w = rect.Right - rect.Left;
+        var h = rect.Bottom - rect.Top;
+        if (w <= 0 || h <= 0) return;
+
+        // ~8px corner radius at 100% scale, matched to Windows 11's own
+        // "round" preset and scaled so it looks the same size on any monitor.
+        var dpi = VisualTreeHelper.GetDpi(this).DpiScaleX;
+        var diameter = (int)Math.Round(16 * dpi);
+        var region = CreateRoundRectRgn(0, 0, w + 1, h + 1, diameter, diameter);
+        if (region == IntPtr.Zero) return;
+
+        // Ownership of the region handle transfers to the window on success;
+        // SetWindowRgn frees the *previous* region itself, so there's nothing
+        // here to clean up either way.
+        if (SetWindowRgn(_hwnd, region, true) == 0) DeleteObject(region);
+    }
+
+    [DllImport("user32.dll")] private static extern bool GetClientRect(IntPtr hwnd, out RECTN rect);
+    [DllImport("user32.dll")] private static extern int SetWindowRgn(IntPtr hwnd, IntPtr hRgn, bool bRedraw);
+    [DllImport("gdi32.dll")] private static extern IntPtr CreateRoundRectRgn(int x1, int y1, int x2, int y2, int cx, int cy);
+    [DllImport("gdi32.dll")] private static extern bool DeleteObject(IntPtr hObject);
 
     private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
@@ -477,22 +556,55 @@ public partial class MainWindow : Window
         _overlay.Height = VideoContainer.ActualHeight;
     }
 
+    // Maximize/restore is a DWM compositor animation of this window's own
+    // bitmap - mpv's video redraws once, immediately, and DWM visually scales
+    // between the before/after frames over ~200ms. The overlay is a *separate*
+    // top-level window, so it isn't part of that animation: repositioning it
+    // right away (the old behaviour) snapped the controls to their final size
+    // instantly while the video was still visibly growing/shrinking underneath
+    // - the "stuttering, expanding in and out" look. Hiding the overlay for the
+    // animation's duration and only placing it once things have settled keeps
+    // both in sync instead of racing each other.
     private void MainWindow_StateChanged(object? sender, EventArgs e)
     {
         if (_overlay == null) return;
+        _maximizeSettleTimer?.Stop();
+
         if (WindowState == WindowState.Minimized)
         {
             _overlay.Hide();
+            return;
         }
-        else
+
+        _overlay.Hide();
+
+        // Nothing to wait out if the user (or an accessibility setting) has
+        // turned window animations off - there is no transition to desync from.
+        if (!SystemParameters.MinimizeAnimation)
         {
+            PositionOverlay();
             _overlay.Show();
-            Dispatcher.BeginInvoke(PositionOverlay, System.Windows.Threading.DispatcherPriority.Loaded);
+            return;
         }
+
+        if (_maximizeSettleTimer == null)
+        {
+            _maximizeSettleTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(220) };
+            _maximizeSettleTimer.Tick += MaximizeSettleTimer_Tick;
+        }
+        _maximizeSettleTimer.Start();
+    }
+
+    private void MaximizeSettleTimer_Tick(object? sender, EventArgs e)
+    {
+        _maximizeSettleTimer!.Stop();
+        PositionOverlay();
+        _overlay?.Show();
     }
 
     private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
+        _maximizeSettleTimer?.Stop();
         _closing = true;
         SaveSession();
 

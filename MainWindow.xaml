@@ -4,9 +4,24 @@
         Title="Nexus Player" Height="760" Width="1280"
         Background="{StaticResource Bg0}"
         FontFamily="{StaticResource UiFont}"
-        WindowStyle="None">
+        WindowStyle="SingleBorderWindow">
+    <!-- "Sheet of glass": WindowStyle stays a real, WS_CAPTION-bearing window
+         style (rather than None's bare popup) and GlassFrameThickness="-1"
+         tells WindowChrome to extend that glass across the entire window, so
+         none of the native frame ever actually paints - visually identical to
+         a borderless window, but DWM still considers this a normal top-level
+         window it owns the frame of, which is what DWMWA_WINDOW_CORNER_
+         PREFERENCE (MainWindow.xaml.cs) needs to have any chance of working -
+         it is a silent no-op on a WindowStyle="None" popup with no frame for
+         it to round. Whether that chance pays off depends on the Windows
+         shell: this app's actual corner rounding, the one guaranteed to show
+         up regardless, comes from the SetWindowRgn clip in MainWindow.xaml.cs
+         (see UpdateWindowRegion) - it doesn't depend on WindowStyle at all,
+         but SingleBorderWindow's real frame is free and correct to keep
+         regardless. CornerRadius stays 0 either way: neither mechanism is
+         something WindowChrome itself needs to draw. -->
     <WindowChrome.WindowChrome>
-        <WindowChrome CaptionHeight="40" ResizeBorderThickness="6" GlassFrameThickness="0" CornerRadius="0"/>
+        <WindowChrome CaptionHeight="40" ResizeBorderThickness="6" GlassFrameThickness="-1" CornerRadius="0"/>
     </WindowChrome.WindowChrome>
 
     <Grid>
