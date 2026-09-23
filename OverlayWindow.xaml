@@ -481,6 +481,17 @@
                                 <TextBlock Text="Larger tiers look better and cost more GPU. Anime4K only helps drawn line-art; it does nothing for live action."
                                            FontSize="9.5" Foreground="{StaticResource TextMuted}" TextWrapping="Wrap" Margin="4,4,4,10"/>
 
+                                <TextBlock Style="{StaticResource SectionHeader}" Text="D I S P L A Y" Margin="2,10,0,4"/>
+                                <CheckBox x:Name="AutoDisplayProfile" Foreground="{StaticResource Text}" FontSize="12"
+                                          Margin="4,2,0,6" Focusable="False"
+                                          Checked="AutoDisplayProfile_Changed" Unchecked="AutoDisplayProfile_Changed">
+                                    <StackPanel>
+                                        <TextBlock Text="Automatically match display" Foreground="{StaticResource Text}" FontSize="12"/>
+                                        <TextBlock Text="Picks fullscreen mode and HDR/SDR for whichever screen this is on"
+                                                   Foreground="{StaticResource TextMuted}" FontSize="9.5" TextWrapping="Wrap"/>
+                                    </StackPanel>
+                                </CheckBox>
+
                                 <Button Style="{StaticResource TextButton}" Click="ResetUpscaler_Click" Margin="2,4,2,0">
                                     <StackPanel Orientation="Horizontal">
                                         <Path Style="{StaticResource IconPath}" Data="{StaticResource IconReset}"

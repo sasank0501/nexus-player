@@ -34,7 +34,16 @@
         <WindowChrome CaptionHeight="40" ResizeBorderThickness="6" GlassFrameThickness="-1" CornerRadius="0"/>
     </WindowChrome.WindowChrome>
 
-    <Grid>
+    <!-- GlassFrameThickness="-1" above extends DWM's glass-composition frame
+         across the whole window (the "sheet of glass" trick) so DWM keeps
+         treating this as a real top-level window - but on this machine's
+         older Windows-10-derived DWM shell (see OnSourceInitialized's own
+         corner-rounding comment for the same root cause), that frame
+         extension paints a thin native highlight line right at the window's
+         true edge. A -1 margin here makes WPF's own content paint fractionally
+         past that edge, covering the seam - the standard fix for this exact,
+         well-documented WindowChrome artifact. -->
+    <Grid Margin="-1">
         <Grid.RowDefinitions>
             <RowDefinition x:Name="TitleRow" Height="40"/>
             <RowDefinition Height="*"/>

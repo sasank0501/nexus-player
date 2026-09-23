@@ -192,6 +192,7 @@ public partial class OverlayWindow : Window
         ThinLines.IsChecked = s.Anime4kThinLines;
         UpscalerEnabled.IsChecked = s.Anime4kPreset != "Off";
         SelectPresetRadio(s.Anime4kPreset);
+        AutoDisplayProfile.IsChecked = s.AutoSwitchDisplayProfile;
         _ready = true;
 
         UpdateVolume(s.Volume);
@@ -1118,6 +1119,14 @@ public partial class OverlayWindow : Window
         ApplyShaders();
     }
 
+    // Takes effect on the next mpv launch / fullscreen toggle, not live - no
+    // ApplyShaders()-style immediate push needed.
+    private void AutoDisplayProfile_Changed(object s, RoutedEventArgs e)
+    {
+        if (!_ready) return;
+        Config.AutoSwitchDisplayProfile = AutoDisplayProfile.IsChecked == true;
+    }
+
     private void UpscalerEnabled_Changed(object s, RoutedEventArgs e)
     {
         if (!_ready) return;
@@ -1256,20 +1265,29 @@ public partial class OverlayWindow : Window
             foreach (var item in items)
             {
                 var row = new Grid { Margin = new Thickness(0, 0, 0, 5) };
-                row.Children.Add(new TextBlock
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+                var description = new TextBlock
                 {
                     Text = item.Description,
                     FontSize = 12,
                     Foreground = (Brush)FindResource("Text"),
-                    MaxWidth = 175,
                     TextTrimming = TextTrimming.CharacterEllipsis,
-                });
-                row.Children.Add(new TextBlock
+                    Margin = new Thickness(0, 0, 10, 0),
+                };
+                Grid.SetColumn(description, 0);
+
+                var keys = new TextBlock
                 {
                     Text = item.Keys,
                     Style = (Style)FindResource("ShortcutKey"),
                     HorizontalAlignment = HorizontalAlignment.Right,
-                });
+                };
+                Grid.SetColumn(keys, 1);
+
+                row.Children.Add(description);
+                row.Children.Add(keys);
                 column.Children.Add(row);
             }
             ShortcutColumns.Items.Add(column);

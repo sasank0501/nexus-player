@@ -336,11 +336,29 @@ public partial class MainWindow : Window
             "--force-window=yes",
             "--no-border",
             "--osc=no",     // our overlay replaces mpv's built-in controls
-            // mpv defaults this to auto, which silently engages HDR passthrough on
-            // an HDR display — the app's Display switch owns SDR/HDR instead
-            "--target-colorspace-hint=no",
         })
             psi.ArgumentList.Add(a);
+
+        // AutoSwitchDisplayProfile: decide these from the monitor mpv is
+        // actually about to draw on, instead of inheriting whatever machine
+        // mpv.conf was last tuned for. d3d11-exclusive-fs only gets negotiated
+        // at launch/fullscreen-enter, so this initial guess is launch-time
+        // only - ToggleFullscreen re-derives the colorspace target live on
+        // every fullscreen entry, in case the window has since moved monitors.
+        if (_settings.AutoSwitchDisplayProfile)
+        {
+            var monitor = MonitorFromWindow(_hwnd, 2 /* MONITOR_DEFAULTTONEAREST */);
+            var profile = DisplayProfileService.Detect(monitor);
+            psi.ArgumentList.Add($"--d3d11-exclusive-fs={(profile.IsInternalPanel ? "no" : "yes")}");
+            psi.ArgumentList.Add($"--target-colorspace-hint={(profile.HdrCapable && profile.HdrEnabled ? "yes" : "no")}");
+        }
+        else
+        {
+            // mpv defaults this to auto, which silently engages HDR passthrough
+            // on an HDR display — leave it off when auto-detection is disabled,
+            // matching this app's previous fixed behaviour.
+            psi.ArgumentList.Add("--target-colorspace-hint=no");
+        }
 
         // Auto-loading off, then the wanted scripts by name. quality-menu.lua
         // otherwise overwrites ytdl-format on every load and our Quality menu
@@ -663,18 +681,42 @@ public partial class MainWindow : Window
 
             // a plain borderless window covering the monitor exactly is what
             // VLC/mpv use — the shell detects it and puts the taskbar behind
-            // natively, as long as this (non-layered) window stays foreground
+            // natively, as long as this (non-layered) window stays foreground.
+            // NoResize drops WS_THICKFRAME first: Windows pads any resizable,
+            // non-maximized top-level window with an invisible resize border
+            // (~7px at 100% scale) outside its painted frame, which otherwise
+            // insets the visible video from the monitor edge by exactly that
+            // much - a sliver of bezel showing on every side. A real Maximized
+            // window gets this compensated automatically, but this state
+            // deliberately stays Normal (Maximized would clamp to the work
+            // area and leave the taskbar showing), so nothing else cancels it.
             var monitor = MonitorFromWindow(new WindowInteropHelper(this).Handle, 2);
             var mi = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
             GetMonitorInfo(monitor, ref mi);
             var toDip = PresentationSource.FromVisual(this)!.CompositionTarget!.TransformFromDevice;
             var tl = toDip.Transform(new Point(mi.rcMonitor.Left, mi.rcMonitor.Top));
             var br = toDip.Transform(new Point(mi.rcMonitor.Right, mi.rcMonitor.Bottom));
+            ResizeMode = ResizeMode.NoResize;
             WindowState = WindowState.Normal;
             Left = tl.X;
             Top = tl.Y;
             Width = br.X - tl.X;
             Height = br.Y - tl.Y;
+
+            // Re-derive the HDR/SDR target for whichever monitor this is,
+            // fresh on every fullscreen entry - the window may have moved
+            // since launch, and unlike d3d11-exclusive-fs this is a real
+            // runtime property mpv can pick up without a relaunch. mpv only
+            // re-negotiates its swapchain colorspace on a resize, hence the
+            // NudgeVideoSurface() nudge (see its own doc comment).
+            if (_settings.AutoSwitchDisplayProfile && Ipc != null)
+            {
+                var profile = DisplayProfileService.Detect(monitor);
+                var hdrTarget = profile.HdrCapable && profile.HdrEnabled;
+                Fire.AndForget(Ipc.SetProperty("target-colorspace-hint", hdrTarget ? "yes" : "no"),
+                    "display HDR target");
+                NudgeVideoSurface();
+            }
         }
         else
         {
@@ -685,6 +727,7 @@ public partial class MainWindow : Window
                 Sidebar.Visibility = Visibility.Visible;
                 SidebarCol.Width = new GridLength(300);
             }
+            ResizeMode = ResizeMode.CanResize;
             Left = _preFullscreenBounds.Left;
             Top = _preFullscreenBounds.Top;
             Width = _preFullscreenBounds.Width;
